@@ -103,7 +103,7 @@ def main(args):
         tic = time.time()
 
         for i, batch in enumerate(data_loader):
-            states, actions = batch['states'].to(device), batch['actions'].to(device)
+            states, actions = batch['observations'].to(device), batch['actions'].to(device)
             loss, sublosses = opal.train_primitive(states, actions, args.beta)
             epoch_loss += loss * states.shape[0]
             num_data += states.shape[0]
