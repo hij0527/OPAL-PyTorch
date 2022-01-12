@@ -61,14 +61,20 @@ def parse_args():
 
 
 def main(args):
+    run_id = 'opal_{}_{}'.format(args.seed, time.time())
+    log_dir = os.path.join(args.results_root, args.log_dir, run_id)
+    ckpt_dir = os.path.join(args.results_root, args.ckpt_dir, run_id)
+    args_dir = os.path.join(args.results_root, 'args', run_id)
+
     os.makedirs(args.results_root, exist_ok=True)
-    os.makedirs(os.path.join(args.results_root, args.log_dir), exist_ok=True)
-    os.makedirs(os.path.join(args.results_root, args.ckpt_dir), exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(ckpt_dir, exist_ok=True)
+    os.makedirs(args_dir, exist_ok=True)
 
     def get_ckpt_name(phase, step):
-        return os.path.join(args.results_root, args.ckpt_dir, 'phase{:d}_{:d}.ckpt'.format(phase, step))
+        return os.path.join(ckpt_dir, 'phase{:d}_{:d}.ckpt'.format(phase, step))
 
-    with open(os.path.join(args.results_root, 'args.json'), 'w') as f:
+    with open(os.path.join(args_dir, 'args.json'), 'w') as f:
         json.dump(args.__dict__, f, indent=2)
 
     device = python_utils.get_device(args.gpu_id)
@@ -92,7 +98,7 @@ def main(args):
     )
     opal.init_optimizers(lr=args.lr)
 
-    writer = SummaryWriter(os.path.join(args.results_root, args.log_dir))
+    writer = SummaryWriter(log_dir)
 
     # set up initial offline dataset
     buffer = Buffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len, verbose=args.verbose)
@@ -134,6 +140,9 @@ def main(args):
 
     if args.save_freq <= 0 or args.epochs % args.save_freq != 0:
         torch.save(opal.state_dict(phase=1), get_ckpt_name(phase=1, step=args.epochs))
+
+    # temporarily added for test
+    torch.save(opal.state_dict(phase=2), get_ckpt_name(phase=2, step=args.epochs))
 
 
 if __name__ == "__main__":

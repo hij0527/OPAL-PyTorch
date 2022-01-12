@@ -65,6 +65,20 @@ class OPAL:
 
         return loss, {'nll': loss_nll, 'kld': loss_kld}
 
+    def get_action(self, state, deterministic=False):
+        state = torch.atleast_2d(torch.as_tensor(state, dtype=torch.float32, device=self.device))
+        mean_z, logstd_z = self._task_policy(state)
+        if deterministic:
+            latent = mean_z
+        else:
+            latent = Normal(mean_z, logstd_z.exp()).sample()
+        mean_a, logstd_a = self._primitive_policy(state, latent)
+        if deterministic:
+            action = mean_a
+        else:
+            action = Normal(mean_a, logstd_a.exp()).sample()
+        return torch.flatten(action)
+
     def state_dict(self, phase):
         if phase == 1:
             return {
