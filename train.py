@@ -10,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from memory.buffer import Buffer
 from models.opal import OPAL
-import utils.utils as utils
+import utils.python_utils as utils
 
 
 def parse_args():
