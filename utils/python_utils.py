@@ -1,5 +1,7 @@
 import numpy as np
+import os
 import random
+import sys
 import torch
 
 
@@ -24,3 +26,13 @@ def seed_all(seed=None, env=None):
         env.seed(seed)
         if hasattr(env.action_space, 'seed') and callable(env.action_space.seed):
             env.action_space.seed(seed)
+
+
+class SuppressStdout:
+    def __enter__(self):
+        self._prev_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout.close()
+        sys.stdout = self._prev_stdout

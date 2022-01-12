@@ -4,15 +4,9 @@ from torch.utils.data import Dataset
 
 
 class Buffer(Dataset):
-    _ENV_TYPES = OrderedDict({
-        'antmaze-medium-diverse-v0': 'd4rl',
-        'antmaze-large-diverse-v0': 'd4rl',
-    })
-    ENVS = list(_ENV_TYPES.keys())
-
-    def __init__(self, env, subtraj_len, verbose=False):
-        self.env = env
-        self.env_type = self._ENV_TYPES[env.unwrapped.spec.id]
+    def __init__(self, domain_name, task_name, subtraj_len, verbose=False):
+        self.domain_name = domain_name
+        self.task_name = task_name
         self.subtraj_len = subtraj_len
         self.verbose = verbose
 
@@ -27,17 +21,37 @@ class Buffer(Dataset):
             'observations': self.dataset['observations'][subtraj_slice],
             'actions': self.dataset['actions'][subtraj_slice],
             'rewards': self.dataset['rewards'][subtraj_slice],
+            'next_observations': self.dataset['next_observations'][subtraj_slice],
             'terminals': self.dataset['terminals'][subtraj_slice],
         }
 
     def __len__(self):
         return len(self.subtraj_indices)
 
-    def gather_data(self):
-        # dataset: dict of np.ndarrays with keys including 'states', 'actions', 'rewards', 'dones'
-        if self.env_type == 'd4rl':
-            dataset = self.env.get_dataset()
-            dataset['terminals'] = np.logical_or(dataset['terminals'], dataset['timeouts'])
+    def gather_data(self, sparse_reward=False, data_dir='./data', policy_path=None):
+        # dataset: dict of np.ndarrays with keys including 'observations', 'actions', 'rewards', 'next_observations', 'terminals'
+        if self.domain_name == 'antmaze':
+            import argparse
+            from utils.antmaze_dataset import get_dataset
+            dataset = get_dataset(argparse.Namespace(
+                noisy=True,
+                maze=self.task_name,
+                num_samples=int(1e6),
+                policy_file=policy_path,
+                video=False,
+                max_episode_steps=1000,
+                multi_start=True,
+                multigoal=True,
+                data_dir=data_dir,
+                verbose=self.verbose,
+            ))
+        elif self.domain_name == 'kitchen':
+            raise NotImplementedError
+        elif self.domain_name == 'metaworld':
+            raise NotImplementedError
+
+        if sparse_reward:
+            dataset['rewards'] = dataset['rewards_sparse']
 
         terminal_indices = np.where(dataset['terminals'])[0]
         terminal_indices = np.insert(terminal_indices, 0, -1)  # virtual terminal before the first transition

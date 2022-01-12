@@ -1,6 +1,4 @@
 import argparse
-import gym
-import d4rl
 import json
 import os
 import time
@@ -10,31 +8,37 @@ from torch.utils.tensorboard import SummaryWriter
 
 from memory.buffer import Buffer
 from models.opal import OPAL
-import utils.python_utils as utils
+import utils.env_utils as env_utils
+import utils.python_utils as python_utils
 
 
 def parse_args():
     ap = argparse.ArgumentParser('OPAL training')
+
     ap.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
-    ap.add_argument('--gpu_id', type=str, default=None, help='GPU ID to use. ex: 1,2 (default: None)')
+    ap.add_argument('--gpu_id', type=str, default=None, help='GPU IDs to use. ex: 1,2 (default: None)')
     ap.add_argument('--verbose', action='store_true', help='set verbose mode')
 
     ap.add_argument('--results_root', type=str, default='./results', help='root directory to logs, models, videos')
     ap.add_argument('--log_dir', type=str, default='logs', help='log directory')
     ap.add_argument('--ckpt_dir', type=str, default='checkpoints', help='model (checkpoint) directory')
+    ap.add_argument('--data_dir', type=str, default='./data', help='dataset directory')
+    ap.add_argument('--dataset_policy', type=str, default=None, help='path to policy file for dataset collection')
 
     ap.add_argument('--print_freq', type=int, default=100, help='training log (stdout) frequency in steps')
     ap.add_argument('--log_freq', type=int, default=100, help='training log (tensorboard) frequency in steps')
     ap.add_argument('--save_freq', type=int, default=20, help='model save frequency in epochs')
 
-    ap.add_argument('--env', type=str, choices=Buffer.ENVS, default=Buffer.ENVS[0], help='name of environment')
-    ap.add_argument('--dataset_size', type=int, default=1e6, help='size of offline dataset for phase 1')
-    ap.add_argument('--subtraj_len', '-C', type=int, default=10, help='length of subtrajectory (c)')
-    ap.add_argument('--subtraj_num', '-N', type=int, default=-1, help='number of subtrajectories for phase 1 (N)')
-    ap.add_argument('--latent_dim', '-Z', type=int, default=8, help='dimension of primitive latent vector (dim(Z))')
+    ap.add_argument('--domain_name', type=str, choices=env_utils.DOMAIN_NAMES, default=env_utils.DOMAIN_NAMES[0], help='environment domain name')
+    ap.add_argument('--task_name', type=str, choices=env_utils.TASK_NAMES, default=env_utils.TASK_NAMES[0], help='environment task name')
+    ap.add_argument('--sparse_reward', action='store_true', help='sparse reward mode')
+    ap.add_argument('--dataset_size', type=int, default=int(1e6), help='size of offline dataset for phase 1')
+    ap.add_argument('--subtraj_len', '-C', metavar='c', type=int, default=10, help='length of subtrajectory (c)')
+    ap.add_argument('--subtraj_num', '-N', metavar='N', type=int, default=-1, help='number of subtrajectories for phase 1 (N)')
+    ap.add_argument('--latent_dim', '-Z', metavar='dim_Z', type=int, default=8, help='dimension of primitive latent vector (dim(Z))')
 
     # model parameters
-    ap.add_argument('--hidden_size', '-H', type=int, default=200, help='size of hidden layers (H)')
+    ap.add_argument('--hidden_size', '-H', metavar='H', type=int, default=200, help='size of hidden layers (H)')
     ap.add_argument('--num_layers', type=int, default=2, help='number of hidden layers')
     ap.add_argument('--num_gru_layers', type=int, default=4, help='number of GRU layers')
     ap.add_argument('--task_hidden_size', type=int, default=256, help='size of hidden layers in task policy')
@@ -66,9 +70,9 @@ def main(args):
     with open(os.path.join(args.results_root, 'args.json'), 'w') as f:
         json.dump(args.__dict__, f, indent=2)
 
-    device = utils.get_device(args.gpu_id)
-    env = gym.make(args.env)
-    utils.seed_all(args.seed, env)
+    device = python_utils.get_device(args.gpu_id)
+    env = env_utils.get_env(args.domain_name, args.task_name)
+    python_utils.seed_all(args.seed, env)
 
     dim_s = env.observation_space.shape[0]
     dim_a = env.action_space.shape[0]
@@ -90,27 +94,27 @@ def main(args):
     writer = SummaryWriter(os.path.join(args.results_root, args.log_dir))
 
     # set up initial offline dataset
-    buffer = Buffer(env, subtraj_len=args.subtraj_len, verbose=args.verbose)
-    buffer.gather_data()
+    buffer = Buffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len, verbose=args.verbose)
+    buffer.gather_data(sparse_reward=args.sparse_reward, data_dir=args.data_dir, policy_path=args.dataset_policy)
     buffer.get_subtraj_dataset()
-
-    # training phase 1: offline unsupervised primitive learning
     data_loader = DataLoader(buffer, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
 
+    # training phase 1: offline unsupervised primitive learning
     train_step = 0
     for epoch in range(1, args.epochs + 1):
+        print('Start training phase 1 epoch {}'.format(epoch))
         epoch_loss, num_data = 0., 0
         tic = time.time()
 
         for i, batch in enumerate(data_loader):
-            states, actions = batch['observations'].to(device), batch['actions'].to(device)
-            loss, sublosses = opal.train_primitive(states, actions, args.beta)
+            states, actions = [batch[k].to(device) for k in ['observations', 'actions']]
+            loss, sublosses = opal.train_primitive(states, actions, beta=args.beta)
             epoch_loss += loss * states.shape[0]
             num_data += states.shape[0]
             train_step += 1
 
             if args.print_freq > 0 and train_step % args.print_freq == 0:
-                print('step {:d} - loss: {:.6f} ({:s})'.format(
+                print('  step {:d} - loss: {:.6f} ({:s})'.format(
                     train_step, loss.item(),
                     ', '.join('{}: {:.6e}'.format(k, v.item()) for k, v in sublosses.items())))
 
