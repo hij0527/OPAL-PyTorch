@@ -2,6 +2,13 @@ import torch
 import torch.nn as nn
 
 
+def _weight_init(m):
+    if isinstance(m, nn.Linear):
+        nn.init.xavier_normal_(m.weight.data)
+        if m.bias is not None:
+            m.bias.data.fill_(0)
+
+
 def _make_layers(dims, final_relu=True):
     layers = []
     for i in range(len(dims) - 1):
@@ -21,6 +28,8 @@ class Encoder(nn.Module):  # q_phi(z|tau)
         self.fc_mu = _make_layers([hidden_size, dim_z])
         self.fc_std = _make_layers([hidden_size, dim_z])
 
+        self.apply(_weight_init)
+
     def forward(self, states, actions):
         # input shapes: (batch_size, subtraj_size, dim_s or dim_a)
         # output shape: tuple of (batch_size, dim_z)
@@ -38,6 +47,8 @@ class PrimitivePolicy(nn.Module):  # pi_theta(a|s,z)
         self.fc_mu = _make_layers([hidden_size, dim_a])
         self.fc_std = _make_layers([hidden_size, dim_a])
 
+        self.apply(_weight_init)
+
     def forward(self, s, z):
         x = self.fc1(torch.cat((s, z), dim=-1))
         return self.fc_mu(x), self.fc_std(x)
@@ -50,6 +61,8 @@ class Prior(nn.Module):  # rho_omega(z|s)
         self.fc_mu = _make_layers([hidden_size, dim_z])
         self.fc_std = _make_layers([hidden_size, dim_z])
 
+        self.apply(_weight_init)
+
     def forward(self, s):
         x = self.fc1(s)
         return self.fc_mu(x), self.fc_std(x)
@@ -61,6 +74,8 @@ class TaskPolicy(nn.Module):  # pi_psi(z|s)
         self.fc1 = _make_layers([dim_s] + [hidden_size] * num_layers)
         self.fc_mu = _make_layers([hidden_size, dim_z])
         self.fc_std = _make_layers([hidden_size, dim_z])
+
+        self.apply(_weight_init)
 
     def forward(self, s):
         x = self.fc1(s)
