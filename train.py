@@ -50,6 +50,7 @@ def parse_args():
     ap.add_argument('--num_workers', type=int, default=8, help='number of DataLoader workers')
     ap.add_argument('--lr', type=float, default=1e-3, help='learning rate')
     ap.add_argument('--beta', type=float, default=0.1, help='weight of KL divergence in loss')
+    ap.add_argument('--eps_kld', type=float, default=0., help='upper bound for KL divergence contraint')
 
     args = ap.parse_args()
 
@@ -108,7 +109,7 @@ def main(args):
 
         for i, batch in enumerate(data_loader):
             states, actions = [batch[k].to(device) for k in ['observations', 'actions']]
-            loss, sublosses = opal.train_primitive(states, actions, beta=args.beta)
+            loss, sublosses = opal.train_primitive(states, actions, beta=args.beta, eps_kld=args.eps_kld)
             epoch_loss += loss * states.shape[0]
             num_data += states.shape[0]
             train_step += 1
@@ -129,10 +130,10 @@ def main(args):
         writer.add_scalar('epoch_loss_phase1', epoch_loss.item(), epoch)
 
         if args.save_freq > 0 and epoch % args.save_freq == 0:
-            torch.save(opal.state_dict(is_phase1=True), get_ckpt_name(phase=1, step=epoch))
+            torch.save(opal.state_dict(phase=1), get_ckpt_name(phase=1, step=epoch))
 
     if args.save_freq <= 0 or args.epochs % args.save_freq != 0:
-        torch.save(opal.state_dict(is_phase1=True), get_ckpt_name(phase=1, step=args.epochs))
+        torch.save(opal.state_dict(phase=1), get_ckpt_name(phase=1, step=args.epochs))
 
 
 if __name__ == "__main__":
