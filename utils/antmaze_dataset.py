@@ -110,7 +110,7 @@ def download_policy_file(policy_path):
     response = requests.get(policy_url, stream=True)
     length = int(response.headers.get('content-length', 0))
 
-    os.makedirs(os.path.dirname(policy_path))
+    os.makedirs(os.path.dirname(policy_path), exist_ok=True)
 
     with tqdm(total=length, unit='iB', unit_scale=True) as pbar, open(policy_path, 'wb') as f:
         for data in response.iter_content(1024):

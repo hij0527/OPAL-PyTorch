@@ -63,7 +63,7 @@ class OPAL:
         self._opt_primitive.step()
         self._opt_prior.step()
 
-        return loss, {'nll': loss_nll, 'kld': loss_kld}
+        return loss.detach(), {'nll': loss_nll.detach(), 'kld': loss_kld.detach()}
 
     def get_action(self, state, deterministic=False):
         state = torch.atleast_2d(torch.as_tensor(state, dtype=torch.float32, device=self.device))

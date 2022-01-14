@@ -116,7 +116,7 @@ def main(args):
         for i, batch in enumerate(data_loader):
             states, actions = [batch[k].to(device) for k in ['observations', 'actions']]
             loss, sublosses = opal.train_primitive(states, actions, beta=args.beta, eps_kld=args.eps_kld)
-            epoch_loss += loss * states.shape[0]
+            epoch_loss += loss.item() * states.shape[0]
             num_data += states.shape[0]
             train_step += 1
 
@@ -132,8 +132,8 @@ def main(args):
 
         epoch_loss /= num_data
         print('[phase1, epoch {:d}] loss: {:.6f}, time: {:.3f}s'.format(
-            epoch, epoch_loss.item(), time.time() - tic))
-        writer.add_scalar('epoch_loss_phase1', epoch_loss.item(), epoch)
+            epoch, epoch_loss, time.time() - tic))
+        writer.add_scalar('epoch_loss_phase1', epoch_loss, epoch)
 
         if args.save_freq > 0 and epoch % args.save_freq == 0:
             torch.save(opal.state_dict(phase=1), get_ckpt_name(phase=1, step=epoch))

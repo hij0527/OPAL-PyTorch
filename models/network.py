@@ -6,10 +6,10 @@ def _weight_init(m):
     if isinstance(m, nn.Linear):
         nn.init.xavier_normal_(m.weight.data)
         if m.bias is not None:
-            m.bias.data.fill_(0)
+            m.bias.data.fill_(1e-3)
 
 
-def _make_layers(dims, final_relu=True):
+def _make_layers(dims, final_relu=False):
     layers = []
     for i in range(len(dims) - 1):
         layers.append(nn.Linear(dims[i], dims[i + 1]))
@@ -22,7 +22,7 @@ def _make_layers(dims, final_relu=True):
 class Encoder(nn.Module):  # q_phi(z|tau)
     def __init__(self, dim_s, dim_a, dim_z, hidden_size=200, num_layers=2, num_gru_layers=4):
         super().__init__()
-        self.fc1 = _make_layers([dim_s] + [hidden_size] * num_layers)
+        self.fc1 = _make_layers([dim_s] + [hidden_size] * num_layers, final_relu=True)
         gru_input_size = hidden_size + dim_a
         self.gru = nn.GRU(gru_input_size, hidden_size, num_gru_layers, batch_first=True, bidirectional=True)
         self.fc_mu = _make_layers([hidden_size, dim_z])
@@ -43,7 +43,7 @@ class Encoder(nn.Module):  # q_phi(z|tau)
 class PrimitivePolicy(nn.Module):  # pi_theta(a|s,z)
     def __init__(self, dim_s, dim_z, dim_a, hidden_size=200, num_layers=2):
         super().__init__()
-        self.fc1 = _make_layers([dim_s + dim_z] + [hidden_size] * num_layers)
+        self.fc1 = _make_layers([dim_s + dim_z] + [hidden_size] * num_layers, final_relu=True)
         self.fc_mu = _make_layers([hidden_size, dim_a])
         self.fc_std = _make_layers([hidden_size, dim_a])
 
@@ -57,7 +57,7 @@ class PrimitivePolicy(nn.Module):  # pi_theta(a|s,z)
 class Prior(nn.Module):  # rho_omega(z|s)
     def __init__(self, dim_s, dim_z, hidden_size=200, num_layers=2):
         super().__init__()
-        self.fc1 = _make_layers([dim_s] + [hidden_size] * num_layers)
+        self.fc1 = _make_layers([dim_s] + [hidden_size] * num_layers, final_relu=True)
         self.fc_mu = _make_layers([hidden_size, dim_z])
         self.fc_std = _make_layers([hidden_size, dim_z])
 
@@ -71,7 +71,7 @@ class Prior(nn.Module):  # rho_omega(z|s)
 class TaskPolicy(nn.Module):  # pi_psi(z|s)
     def __init__(self, dim_s, dim_z, hidden_size=256, num_layers=3):
         super().__init__()
-        self.fc1 = _make_layers([dim_s] + [hidden_size] * num_layers)
+        self.fc1 = _make_layers([dim_s] + [hidden_size] * num_layers, final_relu=True)
         self.fc_mu = _make_layers([hidden_size, dim_z])
         self.fc_std = _make_layers([hidden_size, dim_z])
 

@@ -1,8 +1,9 @@
-import torch
+import numpy as np
 
 
 def gaussian_nll_loss(x, mean, logstd, batch_size):
-    return (logstd + (x - mean) ** 2 / 2 / logstd.exp() ** 2).sum() / batch_size
+    const = 0.5 * np.log(2 * np.pi)
+    return (logstd + const + (x - mean) ** 2 / 2 / logstd.exp() ** 2).sum() / batch_size
 
 
 def gaussian_kld_loss(mean1, logstd1, mean2, logstd2, batch_size, eps_kld):
