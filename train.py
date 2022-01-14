@@ -15,6 +15,7 @@ import utils.python_utils as python_utils
 def parse_args():
     ap = argparse.ArgumentParser('OPAL training')
 
+    ap.add_argument('--run_id', type=str, default=None, help='run id (default: auto generated)')
     ap.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
     ap.add_argument('--gpu_id', type=str, default=None, help='GPU IDs to use. ex: 1,2 (default: None)')
     ap.add_argument('--verbose', action='store_true', help='set verbose mode')
@@ -33,6 +34,7 @@ def parse_args():
     ap.add_argument('--task_name', type=str, choices=env_utils.TASK_NAMES, default=env_utils.TASK_NAMES[0], help='environment task name')
     ap.add_argument('--sparse_reward', action='store_true', help='sparse reward mode')
     ap.add_argument('--dataset_size', type=int, default=int(1e6), help='size of offline dataset for phase 1')
+    ap.add_argument('--normalize', action='store_true', help='set to normalize states')
     ap.add_argument('--subtraj_len', '-C', metavar='c', type=int, default=10, help='length of subtrajectory (c)')
     ap.add_argument('--subtraj_num', '-N', metavar='N', type=int, default=-1, help='number of subtrajectories for phase 1 (N)')
     ap.add_argument('--latent_dim', '-Z', metavar='dim_Z', type=int, default=8, help='dimension of primitive latent vector (dim(Z))')
@@ -61,7 +63,7 @@ def parse_args():
 
 
 def main(args):
-    run_id = 'opal_{}_{}'.format(args.seed, time.time())
+    run_id = 'opal_{}_{}'.format(args.seed, time.time()) if args.run_id is None else args.run_id
     log_dir = os.path.join(args.results_root, args.log_dir, run_id)
     ckpt_dir = os.path.join(args.results_root, args.ckpt_dir, run_id)
     args_dir = os.path.join(args.results_root, 'args', run_id)
@@ -85,6 +87,9 @@ def main(args):
     dim_a = env.action_space.shape[0]
     dim_z = args.latent_dim
 
+    if args.verbose:
+        print('Dimensions: obs = {}, act = {}, latent = {}'.format(dim_s, dim_a, dim_z))
+
     opal = OPAL(
         dim_s=dim_s,
         dim_a=dim_a,
@@ -101,7 +106,7 @@ def main(args):
     writer = SummaryWriter(log_dir)
 
     # set up initial offline dataset
-    buffer = Buffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len, verbose=args.verbose)
+    buffer = Buffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len, normalize=args.normalize, verbose=args.verbose)
     buffer.gather_data(sparse_reward=args.sparse_reward, data_dir=args.data_dir, policy_path=args.dataset_policy)
     buffer.get_subtraj_dataset()
     data_loader = DataLoader(buffer, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)

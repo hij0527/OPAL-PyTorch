@@ -1,18 +1,22 @@
-from collections import OrderedDict
 import numpy as np
 from torch.utils.data import Dataset
 
 
 class Buffer(Dataset):
-    def __init__(self, domain_name, task_name, subtraj_len, verbose=False):
+    def __init__(self, domain_name, task_name, subtraj_len, normalize=False, verbose=False):
         self.domain_name = domain_name
         self.task_name = task_name
         self.subtraj_len = subtraj_len
+        self.normalize = normalize
         self.verbose = verbose
 
         self.dataset = {}
         self.terminal_indices = np.empty(0, dtype=int)
         self.subtraj_indices = np.empty(0, dtype=int)
+
+        if self.normalize:
+            self.obs_mean = np.zeros(1)
+            self.obs_std = np.ones(1)
 
     def __getitem__(self, index):
         # return subtrajectories
@@ -27,6 +31,16 @@ class Buffer(Dataset):
 
     def __len__(self):
         return len(self.subtraj_indices)
+
+    def normalize_observation(self, observation):
+        if not self.normalize:
+            return observation
+        return (observation - self.obs_mean) / self.obs_std
+
+    def unnormalize_observation(self, observation):
+        if not self.normalize:
+            return observation
+        return observation * self.obs_std + self.obs_mean
 
     def gather_data(self, sparse_reward=False, data_dir='./data', policy_path=None):
         # dataset: dict of np.ndarrays with keys including 'observations', 'actions', 'rewards', 'next_observations', 'terminals'
@@ -50,9 +64,6 @@ class Buffer(Dataset):
         elif self.domain_name == 'metaworld':
             raise NotImplementedError
 
-        if sparse_reward:
-            dataset['rewards'] = dataset['rewards_sparse']
-
         terminal_indices = np.where(dataset['terminals'])[0]
         terminal_indices = np.insert(terminal_indices, 0, -1)  # virtual terminal before the first transition
         if terminal_indices[-1] != len(dataset['terminals']) - 1:
@@ -70,6 +81,21 @@ class Buffer(Dataset):
                 traj_lens.mean(), traj_lens.min(), np.median(traj_lens), traj_lens.max()))
             print('[B]', '- average return: {:.3f} (min: {:.2f}, med: {:.2f}, max: {:.2f})'.format(
                 traj_rets.mean(), traj_rets.min(), np.median(traj_rets), traj_rets.max()))
+
+        if self.normalize:
+            obs = self.dataset['observations']
+            self.obs_mean = obs.mean(0)
+            self.obs_std = obs.std(0)
+            self.obs_std[self.obs_std == 0] = 1
+            self.dataset['observations'] = self.normalize_observation(obs)
+            self.dataset['next_observations'] = self.normalize_observation(self.dataset['next_observations'])
+            if self.verbose:
+                print('[B]', 'Using normalized observations')
+
+        if sparse_reward:
+            self.dataset['rewards'] = self.dataset['rewards_sparse']
+            if self.verbose:
+                print('[B]', 'Using sparse reward')
 
     def get_subtraj_dataset(self):
         # get starting indices of subtrajectories with length subtraj_len
