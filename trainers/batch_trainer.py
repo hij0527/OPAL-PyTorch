@@ -7,8 +7,7 @@ class BatchTrainer(BaseTrainer):
     def __init__(
         self,
         model,
-        writer,
-        get_ckpt_name,
+        logger,
         phase,
         tag='',
         print_freq=100,
@@ -17,8 +16,7 @@ class BatchTrainer(BaseTrainer):
     ):
         super().__init__(
             model,
-            writer,
-            get_ckpt_name,
+            logger,
             phase,
             tag,
             print_freq,
@@ -42,6 +40,7 @@ class BatchTrainer(BaseTrainer):
         train_step = 0
 
         for epoch in range(1, num_epochs + 1):
+            print('Epoch {}'.format(epoch))
             self.reset_timer()
             epoch_loss, num_data = 0., 0
 
