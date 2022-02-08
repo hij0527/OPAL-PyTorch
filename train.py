@@ -1,5 +1,5 @@
-import argparse
 import json
+import numpy as np
 import os
 import time
 import torch
@@ -8,64 +8,19 @@ from torch.utils.tensorboard import SummaryWriter
 
 from memory.buffer import Buffer
 from models.opal import OPAL
+from params import parse_args
 import utils.env_utils as env_utils
 import utils.python_utils as python_utils
 
 
-def parse_args():
-    ap = argparse.ArgumentParser('OPAL training')
-
-    ap.add_argument('--run_id', type=str, default=None, help='run id (default: auto generated)')
-    ap.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
-    ap.add_argument('--gpu_id', type=str, default=None, help='GPU IDs to use. ex: 1,2 (default: None)')
-    ap.add_argument('--verbose', action='store_true', help='set verbose mode')
-
-    ap.add_argument('--results_root', type=str, default='./results', help='root directory to logs, models, videos')
-    ap.add_argument('--log_dir', type=str, default='logs', help='log directory')
-    ap.add_argument('--ckpt_dir', type=str, default='checkpoints', help='model (checkpoint) directory')
-    ap.add_argument('--data_dir', type=str, default='./data', help='dataset directory')
-    ap.add_argument('--dataset_policy', type=str, default=None, help='path to policy file for dataset collection')
-
-    ap.add_argument('--print_freq', type=int, default=100, help='training log (stdout) frequency in steps')
-    ap.add_argument('--log_freq', type=int, default=100, help='training log (tensorboard) frequency in steps')
-    ap.add_argument('--save_freq', type=int, default=20, help='model save frequency in epochs')
-
-    ap.add_argument('--domain_name', type=str, choices=env_utils.DOMAIN_NAMES, default=env_utils.DOMAIN_NAMES[0], help='environment domain name')
-    ap.add_argument('--task_name', type=str, choices=env_utils.TASK_NAMES, default=env_utils.TASK_NAMES[0], help='environment task name')
-    ap.add_argument('--sparse_reward', action='store_true', help='sparse reward mode')
-    ap.add_argument('--dataset_size', type=int, default=int(1e6), help='size of offline dataset for phase 1')
-    ap.add_argument('--normalize', action='store_true', help='set to normalize states')
-    ap.add_argument('--subtraj_len', '-C', metavar='c', type=int, default=10, help='length of subtrajectory (c)')
-    ap.add_argument('--subtraj_num', '-N', metavar='N', type=int, default=-1, help='number of subtrajectories for phase 1 (N)')
-    ap.add_argument('--latent_dim', '-Z', metavar='dim_Z', type=int, default=8, help='dimension of primitive latent vector (dim(Z))')
-
-    # model parameters
-    ap.add_argument('--hidden_size', '-H', metavar='H', type=int, default=200, help='size of hidden layers (H)')
-    ap.add_argument('--num_layers', type=int, default=2, help='number of hidden layers')
-    ap.add_argument('--num_gru_layers', type=int, default=4, help='number of GRU layers')
-    ap.add_argument('--task_hidden_size', type=int, default=256, help='size of hidden layers in task policy')
-    ap.add_argument('--task_num_layers', type=int, default=2, help='number of hidden layers in task policy')
-
-    # phase 1: primitive training
-    ap.add_argument('--epochs', type=int, default=100, help='number of epochs for phase 1')
-    ap.add_argument('--batch_size', type=int, default=50, help='batch size for phase 1')
-    ap.add_argument('--num_workers', type=int, default=8, help='number of DataLoader workers')
-    ap.add_argument('--lr', type=float, default=1e-3, help='learning rate')
-    ap.add_argument('--beta', type=float, default=0.1, help='weight of KL divergence in loss')
-    ap.add_argument('--eps_kld', type=float, default=0., help='upper bound for KL divergence contraint')
-
-    args = ap.parse_args()
-
-    for attr in ['results_root']:
-        setattr(args, attr, os.path.expanduser(getattr(args, attr)))
-
-    return args
-
-
 def main(args):
-    run_id = 'opal_{}_{}'.format(args.seed, time.time()) if args.run_id is None else args.run_id
-    log_dir = os.path.join(args.results_root, args.log_dir, run_id)
-    ckpt_dir = os.path.join(args.results_root, args.ckpt_dir, run_id)
+    run_id = '{}_{}'.format(args.run_tag, args.seed)
+    if not args.no_timetag:
+        run_id += '_{}'.format(time.time())
+    print('Run ID: {}'.format(run_id))
+
+    log_dir = os.path.join(args.results_root, 'logs', run_id)
+    ckpt_dir = os.path.join(args.results_root, 'checkpoints', run_id)
     args_dir = os.path.join(args.results_root, 'args', run_id)
 
     os.makedirs(args.results_root, exist_ok=True)
@@ -73,8 +28,8 @@ def main(args):
     os.makedirs(ckpt_dir, exist_ok=True)
     os.makedirs(args_dir, exist_ok=True)
 
-    def get_ckpt_name(phase, step):
-        return os.path.join(ckpt_dir, 'phase{:d}_{:d}.ckpt'.format(phase, step))
+    def get_ckpt_name(phase, step, tag=''):
+        return os.path.join(ckpt_dir, 'phase{:d}{}_{:d}.ckpt'.format(phase, tag, step))
 
     with open(os.path.join(args_dir, 'args.json'), 'w') as f:
         json.dump(args.__dict__, f, indent=2)
@@ -83,8 +38,8 @@ def main(args):
     env = env_utils.get_env(args.domain_name, args.task_name)
     python_utils.seed_all(args.seed, env)
 
-    dim_s = env.observation_space.shape[0]
-    dim_a = env.action_space.shape[0]
+    dim_s = np.prod(env.observation_space.shape)
+    dim_a = np.prod(env.action_space.shape)
     dim_z = args.latent_dim
 
     if args.verbose:
@@ -94,12 +49,12 @@ def main(args):
         dim_s=dim_s,
         dim_a=dim_a,
         dim_z=dim_z,
+        device=device,
         hidden_size=args.hidden_size,
         num_layers=args.num_layers,
         num_gru_layers=args.num_gru_layers,
         task_hidden_size=args.task_hidden_size,
         task_num_layers=args.task_num_layers,
-        device=device,
     )
     opal.init_optimizers(lr=args.lr)
 
@@ -121,19 +76,19 @@ def main(args):
         for i, batch in enumerate(data_loader):
             states, actions = [batch[k].to(device) for k in ['observations', 'actions']]
             loss, sublosses = opal.train_primitive(states, actions, beta=args.beta, eps_kld=args.eps_kld)
-            epoch_loss += loss.item() * states.shape[0]
+            epoch_loss += loss * states.shape[0]
             num_data += states.shape[0]
             train_step += 1
 
             if args.print_freq > 0 and train_step % args.print_freq == 0:
                 print('  step {:d} - loss: {:.6f} ({:s})'.format(
-                    train_step, loss.item(),
-                    ', '.join('{}: {:.6e}'.format(k, v.item()) for k, v in sublosses.items())))
+                    train_step, loss,
+                    ', '.join('{}: {:.6e}'.format(k, v) for k, v in sublosses.items())))
 
             if args.log_freq > 0 and train_step % args.log_freq == 0:
-                writer.add_scalar('loss_phase1', loss.item(), train_step)
+                writer.add_scalar('loss_phase1', loss, train_step)
                 for k, v in sublosses.items():
-                    writer.add_scalar('loss_phase1/{}'.format(k), v.item(), train_step)
+                    writer.add_scalar('loss_phase1/{}'.format(k), v, train_step)
 
         epoch_loss /= num_data
         print('[phase1, epoch {:d}] loss: {:.6f}, time: {:.3f}s'.format(

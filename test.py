@@ -51,12 +51,12 @@ def test(args):
         dim_s=dim_s,
         dim_a=dim_a,
         dim_z=dim_z,
+        device=device,
         hidden_size=args.hidden_size,
         num_layers=args.num_layers,
         num_gru_layers=args.num_gru_layers,
         task_hidden_size=args.task_hidden_size,
         task_num_layers=args.task_num_layers,
-        device=device,
     )
 
     if args.ckpt_path is not None:

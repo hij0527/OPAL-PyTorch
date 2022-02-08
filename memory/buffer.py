@@ -30,6 +30,7 @@ class Buffer(Dataset):
         }
 
     def __len__(self):
+        return 10000
         return len(self.subtraj_indices)
 
     def normalize_observation(self, observation):

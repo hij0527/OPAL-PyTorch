@@ -10,21 +10,22 @@
 # - 'next_observations' and 'rewards_sparse' are added to the dataset
 # - terminals are obtained manually, since the environment never returns True for terminal
 
-import numpy as np
-import h5py
-import argparse
+import gym
 import d4rl
 from d4rl.offline_env import get_keys
+import h5py
+import numpy as np
+import os
+from PIL import Image
 import torch
 from tqdm import tqdm
-from PIL import Image
-import os
 
 from utils.env_utils import get_antmaze_env
 from utils.python_utils import SuppressStdout
 
 
 def parse_args():
+    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--noisy', action='store_true', help='Noisy actions')
     parser.add_argument('--maze', type=str, default='umaze', help='Maze type. umaze, medium, or large')
