@@ -9,6 +9,7 @@ from torch.utils.tensorboard import SummaryWriter
 from memory.buffer import Buffer
 from models.opal import OPAL
 from params import parse_args
+from trainers.batch_trainer import BatchTrainer
 import utils.env_utils as env_utils
 import utils.python_utils as python_utils
 
@@ -64,42 +65,15 @@ def main(args):
     buffer = Buffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len, normalize=args.normalize, verbose=args.verbose)
     buffer.gather_data(sparse_reward=args.sparse_reward, data_dir=args.data_dir, policy_path=args.dataset_policy)
     buffer.get_subtraj_dataset()
-    data_loader = DataLoader(buffer, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
 
     # training phase 1: offline unsupervised primitive learning
-    train_step = 0
-    for epoch in range(1, args.epochs + 1):
-        print('Start training phase 1 epoch {}'.format(epoch))
-        epoch_loss, num_data = 0., 0
-        tic = time.time()
-
-        for i, batch in enumerate(data_loader):
-            states, actions = [batch[k].to(device) for k in ['observations', 'actions']]
-            loss, sublosses = opal.train_primitive(states, actions, beta=args.beta, eps_kld=args.eps_kld)
-            epoch_loss += loss * states.shape[0]
-            num_data += states.shape[0]
-            train_step += 1
-
-            if args.print_freq > 0 and train_step % args.print_freq == 0:
-                print('  step {:d} - loss: {:.6f} ({:s})'.format(
-                    train_step, loss,
-                    ', '.join('{}: {:.6e}'.format(k, v) for k, v in sublosses.items())))
-
-            if args.log_freq > 0 and train_step % args.log_freq == 0:
-                writer.add_scalar('loss_phase1', loss, train_step)
-                for k, v in sublosses.items():
-                    writer.add_scalar('loss_phase1/{}'.format(k), v, train_step)
-
-        epoch_loss /= num_data
-        print('[phase1, epoch {:d}] loss: {:.6f}, time: {:.3f}s'.format(
-            epoch, epoch_loss, time.time() - tic))
-        writer.add_scalar('epoch_loss_phase1', epoch_loss, epoch)
-
-        if args.save_freq > 0 and epoch % args.save_freq == 0:
-            torch.save(opal.state_dict(phase=1), get_ckpt_name(phase=1, step=epoch))
-
-    if args.save_freq <= 0 or args.epochs % args.save_freq != 0:
-        torch.save(opal.state_dict(phase=1), get_ckpt_name(phase=1, step=args.epochs))
+    print('#### Training Phase 1 Start ####')
+    trainer = BatchTrainer(opal, writer=writer, get_ckpt_name=get_ckpt_name, phase=1, tag='',
+                            print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
+    data_keys = ['observations', 'actions']
+    trainer.train(train_fn=opal.train_primitive, buffer=buffer, data_keys=data_keys, device=device,
+                    num_epochs=args.epochs, batch_size=args.batch_size, num_workers=args.num_workers,
+                    beta=args.beta, eps_kld=args.eps_kld)
 
     # temporarily added for test
     torch.save(opal.state_dict(phase=2), get_ckpt_name(phase=2, step=args.epochs))
