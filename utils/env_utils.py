@@ -69,3 +69,25 @@ def get_env(domain_name, task_name):
             # return get_antmaze_env(maze=task_name, multi_start=True, eval=True)
     elif env_type == 'metaworld':
         raise NotImplementedError
+
+
+class PreprocObservation(gym.ObservationWrapper):
+    def __init__(self, env, fn_preproc):
+        super().__init__(env)
+        self.fn_preproc = fn_preproc
+
+    def observation(self, observation):
+        return self.fn_preproc(observation)
+
+
+class SilentEnv(gym.Wrapper):
+    def __init__(self, env):
+        super().__init__(env)
+
+    def step(self, action):
+        with SuppressStdout():
+            return self.env.step(action)
+
+    def reset(self, **kwargs):
+        with SuppressStdout():
+            return self.env.reset(**kwargs)

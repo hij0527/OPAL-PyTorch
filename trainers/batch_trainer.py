@@ -6,7 +6,6 @@ from trainers.base_trainer import BaseTrainer
 class BatchTrainer(BaseTrainer):
     def __init__(
         self,
-        model,
         logger,
         phase,
         tag='',
@@ -15,7 +14,6 @@ class BatchTrainer(BaseTrainer):
         save_freq=10,
     ):
         super().__init__(
-            model,
             logger,
             phase,
             tag,
@@ -26,7 +24,7 @@ class BatchTrainer(BaseTrainer):
 
     def train(
         self,
-        train_fn,
+        model,
         buffer,
         data_keys,
         device,
@@ -50,7 +48,7 @@ class BatchTrainer(BaseTrainer):
 
             for i, batch in enumerate(data_loader):
                 batch_items = [batch[k].to(device) for k in data_keys]
-                loss, sublosses = train_fn(*batch_items, **train_kwargs)
+                loss, sublosses = model.update(*batch_items, **train_kwargs)
                 epoch_loss += loss * batch_items[0].shape[0]
                 num_data += batch_items[0].shape[0]
                 train_step += 1
@@ -61,6 +59,6 @@ class BatchTrainer(BaseTrainer):
             epoch_loss /= num_data
             self.print_losses(epoch, epoch_loss, is_epoch=True)
             self.log_losses(epoch, epoch_loss, is_epoch=True)
-            self.save_model(epoch)
+            self.save_model(model, epoch)
 
-        self.save_model(num_epochs, force=True)
+        self.save_model(model, num_epochs, force=True)

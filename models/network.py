@@ -101,3 +101,14 @@ class TaskPolicy(nn.Module):  # pi_psi(z|s)
         x = self.fc1(states)
         mean, logstd = self.fc_mu(x), self.fc_std(x)
         return mean, logstd
+
+
+class QNetwork(nn.Module):
+    def __init__(self, dim_s, dim_a, hidden_size=200, num_layers=2, activation='relu'):
+        super().__init__()
+        self.fc = _make_layers([dim_s + dim_a] + [hidden_size] * num_layers + [1], activation=activation)
+
+        self.apply(_weight_init)
+
+    def forward(self, state, action):
+        return self.fc(torch.cat((state, action), dim=-1))

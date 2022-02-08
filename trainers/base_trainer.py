@@ -5,7 +5,6 @@ import torch
 class BaseTrainer(object):
     def __init__(
         self,
-        model,
         logger,
         phase,
         tag='',
@@ -13,7 +12,6 @@ class BaseTrainer(object):
         log_freq=100,
         save_freq=10,
     ):
-        self.model = model
         self.logger = logger
         self.phase = phase
         self.tag = tag
@@ -56,7 +54,7 @@ class BaseTrainer(object):
         for k, v in sublosses.items():
             self.logger.log('{}/{}'.format(loss_tag, k), v, step)
 
-    def save_model(self, epoch, force=False):
+    def save_model(self, model, epoch, force=False):
         if force or (self.save_freq > 0 and epoch % self.save_freq == 0):
             ckpt_name = self.logger.get_ckpt_name(phase=self.phase, step=epoch, tag=self.tail_tag)
-            torch.save(self.model.state_dict(phase=self.phase), ckpt_name)
+            torch.save(model.state_dict(), ckpt_name)

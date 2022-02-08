@@ -32,10 +32,8 @@ def main(args):
         hidden_size=args.hidden_size,
         num_layers=args.num_layers,
         num_gru_layers=args.num_gru_layers,
-        task_hidden_size=args.task_hidden_size,
-        task_num_layers=args.task_num_layers,
     )
-    opal.init_optimizers(lr=args.lr)
+    opal.init_optimizer(lr=args.lr)
 
     # set up initial offline dataset
     buffer = Buffer(args.domain_name, args.task_name,
@@ -45,16 +43,13 @@ def main(args):
 
     # training phase 1: offline unsupervised primitive learning
     print('#### Training Phase 1 Start ####')
-    trainer = BatchTrainer(opal, logger=logger, phase=1, tag='',
+    trainer = BatchTrainer(logger=logger, phase=1, tag='',
                            print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
     data_keys = ['observations', 'actions']
-    trainer.train(train_fn=opal.train_primitive, buffer=buffer, data_keys=data_keys, device=device,
+    trainer.train(model=opal, buffer=buffer, data_keys=data_keys, device=device,
                   num_epochs=args.epochs, batch_size=args.batch_size, num_workers=args.num_workers,
                   beta=args.beta, eps_kld=args.eps_kld)
     print('#### Training Phase 1 End ####')
-
-    # temporarily added for test
-    torch.save(opal.state_dict(phase=2), logger.get_ckpt_name(phase=2, step=args.epochs))
 
 
 if __name__ == "__main__":

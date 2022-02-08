@@ -6,9 +6,11 @@ import utils.env_utils as env_utils
 
 
 def parse_args():
-    ap = argparse.ArgumentParser('OPAL training')
+    ap = argparse.ArgumentParser('OPAL training Phase 2')
 
-    ap.add_argument('--run_tag', type=str, default='opal', help='tag to run id (default: opal)')
+    ap.add_argument('--ckpt_path', type=str, required=True, help='phase 1 checkpoint path')
+
+    ap.add_argument('--run_tag', type=str, default='task', help='tag to run id (default: opal)')
     ap.add_argument('--no_timetag', action='store_true', help='if set, do not append time string to run id')
     ap.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
     ap.add_argument('--gpu_id', type=str, default=None, help='GPU IDs to use. ex: 1,2 (default: None)')
@@ -28,21 +30,30 @@ def parse_args():
     ap.add_argument('--latent_dim', '-Z', metavar='dim_Z', type=int, default=8, help='dimension of primitive latent vector (dim(Z))')
 
     # model parameters
-    ap.add_argument('--hidden_size', '-H', metavar='H', type=int, default=200, help='size of hidden layers (H)')
-    ap.add_argument('--num_layers', type=int, default=2, help='number of hidden layers')
+    ap.add_argument('--opal_hidden_size', '-H', metavar='H', type=int, default=200, help='OPAL: size of hidden layers (H)')
+    ap.add_argument('--opal_num_layers', type=int, default=2, help='OPAL: number of hidden layers')
+    ap.add_argument('--opal_num_gru_layers', type=int, default=4, help='OPAL: number of GRU layers')
+
+    ap.add_argument('--hidden_size', type=int, default=256, help='size of hidden layers (H)')
+    ap.add_argument('--num_layers', type=int, default=3, help='number of hidden layers')
     ap.add_argument('--num_gru_layers', type=int, default=4, help='number of GRU layers')
 
-    # phase 1: primitive training
-    ap.add_argument('--epochs', type=int, default=100, help='number of epochs for phase 1')
-    ap.add_argument('--batch_size', type=int, default=50, help='batch size for phase 1')
-    ap.add_argument('--num_workers', type=int, default=8, help='number of DataLoader workers')
-    ap.add_argument('--lr', type=float, default=1e-3, help='learning rate for phase 1')
-    ap.add_argument('--beta', type=float, default=0.1, help='weight of KL divergence in loss')
-    ap.add_argument('--eps_kld', type=float, default=0., help='upper bound for KL divergence contraint')
+    # phase 2: downstream task training
+    ap.add_argument('--task_type', type=str, choices=['offline', 'imitation', 'online', 'multitask'], default='offline', help='downstream task type')
+    ap.add_argument('--policy_type', type=str, choices=['cql', 'bc', 'sac', 'ppo'], default='cql', help='RL algorithm to use for downstream learning')
+    ap.add_argument('--lr', type=float, default=3e-4, help='learning rate for phase 2')
 
-    ap.add_argument('--print_freq', type=int, default=100, help='training log (stdout) frequency in steps')
-    ap.add_argument('--log_freq', type=int, default=100, help='training log (tensorboard) frequency in steps')
-    ap.add_argument('--save_freq', type=int, default=20, help='model save frequency in epochs')
+    ap.add_argument('--print_freq', type=int, default=200, help='training log (stdout) frequency in steps')
+    ap.add_argument('--log_freq', type=int, default=200, help='training log (tensorboard) frequency in steps')
+    ap.add_argument('--save_freq', type=int, default=100, help='model save frequency in epochs/episodes')
+
+    # online
+    ap.add_argument('--online_train_episodes', type=int, default=3000, help='')
+    ap.add_argument('--online_train_start_step', type=int, default=3000, help='')
+    ap.add_argument('--online_updates_per_step', type=int, default=1, help='')
+    ap.add_argument('--online_batch_size', type=int, default=256, help='')
+    ap.add_argument('--online_eval_freq', type=int, default=10, help='')
+    ap.add_argument('--online_eval_episodes', type=int, default=5, help='')
 
     args = ap.parse_args()
 
