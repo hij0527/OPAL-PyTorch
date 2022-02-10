@@ -14,7 +14,10 @@ class BaseModel:
         self.policy_type = policy_type
         self.policy = None
 
-    def train(self, dataset, **kwargs):
+    def init_optimizer(self, lr):
+        raise NotImplementedError
+
+    def update(self, samples, **kwargs):
         raise NotImplementedError
 
     def get_primitive(self, state, deterministic=False, return_mean_std=False, return_logprob=False):

@@ -32,14 +32,14 @@ def main(args):
         hidden_size=args.hidden_size,
         num_layers=args.num_layers,
         num_gru_layers=args.num_gru_layers,
+        state_agnostic=args.state_agnostic,
     )
     opal.init_optimizer(lr=args.lr)
 
     # set up initial offline dataset
     buffer = Buffer(args.domain_name, args.task_name,
                     subtraj_len=args.subtraj_len, normalize=args.normalize, verbose=args.verbose)
-    buffer.gather_data(sparse_reward=args.sparse_reward, data_dir=args.data_dir, policy_path=args.dataset_policy)
-    buffer.get_subtraj_dataset()
+    buffer.load_data(sparse_reward=args.sparse_reward, data_dir=args.data_dir, policy_path=args.dataset_policy)
 
     # training phase 1: offline unsupervised primitive learning
     print('#### Training Phase 1 Start ####')

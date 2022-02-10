@@ -3,7 +3,7 @@ from torch.distributions import Normal
 from torch.optim import Adam
 
 from models.loss import gaussian_kld_loss, gaussian_nll_loss
-from models.network import Prior, Encoder, PrimitivePolicy
+from models.network import Prior, Encoder, EncoderStateAgnostic, PrimitivePolicy, PrimitivePolicyStateAgnostic
 
 
 class OPAL:
@@ -16,12 +16,25 @@ class OPAL:
         hidden_size=200,
         num_layers=2,
         num_gru_layers=4,
+        state_agnostic=False,
     ):
         self.device = device
+        self.state_agnostic = state_agnostic
 
-        self.encoder = Encoder(dim_s, dim_a, dim_z, hidden_size, num_layers, num_gru_layers).to(device)  # q_phi
-        self.primitive_policy = PrimitivePolicy(dim_s, dim_z, dim_a, hidden_size, num_layers).to(device)  # pi_theta
-        self.prior = Prior(dim_s, dim_z, hidden_size, num_layers).to(device)  # rho_omega
+        # encoder (q_phi)
+        if state_agnostic:
+            self.encoder = EncoderStateAgnostic(dim_s, dim_a, dim_z, hidden_size, num_layers, num_gru_layers).to(device)
+        else:
+            self.encoder = Encoder(dim_s, dim_a, dim_z, hidden_size, num_layers, num_gru_layers).to(device)
+
+        # primitive policy (pi_theta)
+        if state_agnostic:
+            self.primitive_policy = PrimitivePolicyStateAgnostic(dim_z, dim_a, hidden_size, num_gru_layers).to(device)
+        else:
+            self.primitive_policy = PrimitivePolicy(dim_s, dim_z, dim_a, hidden_size, num_layers).to(device)
+
+        # prior (rho_omega)
+        self.prior = Prior(dim_s, dim_z, hidden_size, num_layers).to(device)
 
         self.models = [self.encoder, self.primitive_policy, self.prior]
         self.optimizer = None
@@ -29,35 +42,27 @@ class OPAL:
     def init_optimizer(self, lr):
         self.optimizer = Adam([p for m in self.models for p in list(m.parameters())], lr=lr)
 
-    def update(self, states, actions, beta, eps_kld=0.):  # shape of states: (batch_size, subtraj_size, dim_s)
-        # shape of states: (batch_size, subtraj_size, dim_s)
-        batch_size, subtraj_len = states.shape[0], states.shape[1]
+    def update(self, samples, **kwargs):
+        finetune = kwargs.pop('finetune', False)
 
-        # sample z ~ q_phi(z|tau) using reparameterization
-        mean_z, logstd_z = self.encoder(states, actions)
-        z = Normal(mean_z, logstd_z.exp()).rsample()
+        if finetune:
+            return self._finetune(samples, **kwargs)
+        else:
+            return self._update(samples, **kwargs)
 
-        # negative log likelihood of Gaussian pi_theta (Eq. 1)
-        mean_a, logstd_a = self.primitive_policy(states, z.unsqueeze(1).repeat(1, subtraj_len, 1))
-        loss_nll = gaussian_nll_loss(actions, mean_a, logstd_a)
-
-        # KL divergence between two Gaussian q_phi and rho_omega: KLD(q_phi||rho_omega) (Eq. 2)
-        prior_mean_z, prior_logstd_z = self.prior(states[:, 0])
-        loss_kld = gaussian_kld_loss(mean_z, logstd_z, prior_mean_z, prior_logstd_z, eps_kld)
-
-        # update models
-        loss = loss_nll + beta * loss_kld
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
-        return loss.item(), {'nll': loss_nll.item(), 'kld': loss_kld.item()}
+    def encode(self, states, actions):
+        mean_z, _ = self.encoder(states[:, 0] if self.state_agnostic else states, actions)
+        return mean_z
 
     def get_action_from_primitive(self, state, latent, deterministic=False, return_mean_std=False):
         state = torch.as_tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
         latent = torch.as_tensor(latent, dtype=torch.float32, device=self.device).unsqueeze(0)
 
-        mean_a, logstd_a = self.primitive_policy(state, latent)
+        if self.state_agnostic:
+            mean_a, logstd_a = self.primitive_policy(latent)
+        else:
+            mean_a, logstd_a = self.primitive_policy(state, latent)
+
         mean_a, logstd_a = mean_a.squeeze(0), logstd_a.squeeze(0)
 
         if deterministic:
@@ -83,3 +88,47 @@ class OPAL:
         self.prior.load_state_dict(state_dict['prior'])
         if self.optimizer:
             self.optimizer.load_state_dict(state_dict['optimizer'])
+
+    def _update(self, samples, beta=0.1, eps_kld=0.):  # shape of states: (batch_size, subtraj_size, dim_s)
+        states, actions = samples
+        # shape of states: (batch_size, subtraj_size, dim_s)
+        batch_size, subtraj_len = states.shape[0], states.shape[1]
+
+        # sample z ~ q_phi(z|tau) using reparameterization
+        mean_z, logstd_z = self.encoder(states[:, 0] if self.state_agnostic else states, actions)
+        z = Normal(mean_z, logstd_z.exp()).rsample()
+
+        # negative log likelihood of Gaussian pi_theta (Eq. 1)
+        # mean, logstd shape: (batch_size, c, dim_a)
+        if self.state_agnostic:
+            mean_a, logstd_a = self.primitive_policy(z.unsqueeze(1).repeat(1, subtraj_len, 1))
+        else:
+            mean_a, logstd_a = self.primitive_policy(states, z.unsqueeze(1).repeat(1, subtraj_len, 1))
+        loss_nll = gaussian_nll_loss(actions, mean_a, logstd_a)
+
+        # KL divergence between two Gaussian q_phi and rho_omega: KLD(q_phi||rho_omega) (Eq. 2)
+        prior_mean_z, prior_logstd_z = self.prior(states[:, 0])
+        loss_kld = gaussian_kld_loss(mean_z, logstd_z, prior_mean_z, prior_logstd_z, eps_kld)
+
+        # update models
+        loss = loss_nll + beta * loss_kld
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return loss.item(), {'nll': loss_nll.item(), 'kld': loss_kld.item()}
+
+    def _finetune(self, samples):
+        states, actions, latents = samples
+        batch_size, subtraj_len = states.shape[0], states.shape[1]
+
+        # behavior cloning; same as minimizing negative log likelihood (Eq. 3)
+        mean_a, logstd_a = self.primitive_policy(states, latents.unsqueeze(1).repeat(1, subtraj_len, 1))
+        loss = gaussian_nll_loss(actions, mean_a, logstd_a)
+
+        # update
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+
+        return loss.item(), {'bc': loss.item()}

@@ -6,7 +6,7 @@ import utils.env_utils as env_utils
 
 
 def parse_args():
-    ap = argparse.ArgumentParser('OPAL training Phase 2')
+    ap = argparse.ArgumentParser()
 
     ap.add_argument('--ckpt_path', type=str, required=True, help='phase 1 checkpoint path')
 
@@ -33,19 +33,34 @@ def parse_args():
     ap.add_argument('--opal_hidden_size', '-H', metavar='H', type=int, default=200, help='OPAL: size of hidden layers (H)')
     ap.add_argument('--opal_num_layers', type=int, default=2, help='OPAL: number of hidden layers')
     ap.add_argument('--opal_num_gru_layers', type=int, default=4, help='OPAL: number of GRU layers')
+    ap.add_argument('--opal_state_agnostic', action='store_true', help='OPAL: if set, use state agnostic models')
 
     ap.add_argument('--hidden_size', type=int, default=256, help='size of hidden layers (H)')
     ap.add_argument('--num_layers', type=int, default=3, help='number of hidden layers')
     ap.add_argument('--num_gru_layers', type=int, default=4, help='number of GRU layers')
 
+    # data labeling
+    ap.add_argument('--load_latent_buffer', type=str, default=None, help='if set, load latent buffer from this path')
+    ap.add_argument('--save_latent_buffer', type=str, default=None, help='if set, save latent buffer to this path')
+
     # phase 2: downstream task training
     ap.add_argument('--task_type', type=str, choices=['offline', 'imitation', 'online', 'multitask'], default='offline', help='downstream task type')
     ap.add_argument('--policy_type', type=str, choices=['cql', 'bc', 'sac', 'ppo'], default='cql', help='RL algorithm to use for downstream learning')
-    ap.add_argument('--lr', type=float, default=3e-4, help='learning rate for phase 2')
+    ap.add_argument('--batch_size', type=int, default=50, help='batch size for phase 1')
+    ap.add_argument('--num_workers', type=int, default=8, help='number of DataLoader workers')
+    ap.add_argument('--lr', type=float, default=1e-3, help='learning rate for phase 1')
 
     ap.add_argument('--print_freq', type=int, default=200, help='training log (stdout) frequency in steps')
     ap.add_argument('--log_freq', type=int, default=200, help='training log (tensorboard) frequency in steps')
     ap.add_argument('--save_freq', type=int, default=100, help='model save frequency in epochs/episodes')
+
+    # offline
+    ap.add_argument('--offline_finetune_epochs', type=int, default=100, help='')
+    ap.add_argument('--offline_task_epochs', type=int, default=100, help='')
+
+    # imitation
+    ap.add_argument('--imitation_finetune_epochs', type=int, default=100, help='')
+    ap.add_argument('--imitation_task_epochs', type=int, default=100, help='')
 
     # online
     ap.add_argument('--online_train_episodes', type=int, default=3000, help='')
@@ -54,6 +69,13 @@ def parse_args():
     ap.add_argument('--online_batch_size', type=int, default=256, help='')
     ap.add_argument('--online_eval_freq', type=int, default=10, help='')
     ap.add_argument('--online_eval_episodes', type=int, default=5, help='')
+
+    # multi-task
+    ap.add_argument('--multitask_train_episodes', type=int, default=3000, help='')
+    ap.add_argument('--multitask_update_freq', type=int, default=4000, help='')
+    ap.add_argument('--multitask_updates_per_step', type=int, default=80, help='')
+    ap.add_argument('--multitask_eval_freq', type=int, default=10, help='')
+    ap.add_argument('--multitask_eval_episodes', type=int, default=5, help='')
 
     args = ap.parse_args()
 

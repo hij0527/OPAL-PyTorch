@@ -6,7 +6,7 @@ import utils.env_utils as env_utils
 
 
 def parse_args():
-    ap = argparse.ArgumentParser('OPAL training')
+    ap = argparse.ArgumentParser()
 
     ap.add_argument('--run_tag', type=str, default='opal', help='tag to run id (default: opal)')
     ap.add_argument('--no_timetag', action='store_true', help='if set, do not append time string to run id')
@@ -31,6 +31,7 @@ def parse_args():
     ap.add_argument('--hidden_size', '-H', metavar='H', type=int, default=200, help='size of hidden layers (H)')
     ap.add_argument('--num_layers', type=int, default=2, help='number of hidden layers')
     ap.add_argument('--num_gru_layers', type=int, default=4, help='number of GRU layers')
+    ap.add_argument('--state_agnostic', action='store_true', help='if set, use state agnostic models')
 
     # phase 1: primitive training
     ap.add_argument('--epochs', type=int, default=100, help='number of epochs for phase 1')

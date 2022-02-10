@@ -147,11 +147,11 @@ class SAC(nn.Module):
             'policy_optimizer': self.policy_optim.state_dict(),
             'curr_alpha': self.alpha,
         }
-
         if self.automatic_entropy_tuning:
             state_dict.update({
                 'alpha_optimizer': self.alpha_optim.state_dict(),
             })
+        return state_dict
 
     # Load model parameters
     def load_state_dict(self, state_dict):

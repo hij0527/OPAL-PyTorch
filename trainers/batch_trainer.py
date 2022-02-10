@@ -31,10 +31,13 @@ class BatchTrainer(BaseTrainer):
         num_epochs=100,
         batch_size=256,
         num_workers=6,
-        param_schedule=None,
+        param_schedule={},
+        batch_preproc={},
         **train_kwargs
     ):
         data_loader = DataLoader(buffer, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+        fn_preproc = {k: (lambda x: x) for k in data_keys}
+        fn_preproc.update(batch_preproc)
         train_step = 0
 
         for epoch in range(1, num_epochs + 1):
@@ -42,13 +45,12 @@ class BatchTrainer(BaseTrainer):
             self.reset_timer()
             epoch_loss, num_data = 0., 0
 
-            if param_schedule is not None:
-                for k, (v_init, v_max) in param_schedule.items():
-                    train_kwargs[k] = v_init + (v_max - v_init) * (epoch - 1) / (num_epochs - 1)
+            for k, (v_init, v_max) in param_schedule.items():
+                train_kwargs[k] = v_init + (v_max - v_init) * (epoch - 1) / (num_epochs - 1)
 
             for i, batch in enumerate(data_loader):
-                batch_items = [batch[k].to(device) for k in data_keys]
-                loss, sublosses = model.update(*batch_items, **train_kwargs)
+                batch_items = [fn_preproc[k](batch[k]).to(device) for k in data_keys]
+                loss, sublosses = model.update(batch_items, **train_kwargs)
                 epoch_loss += loss * batch_items[0].shape[0]
                 num_data += batch_items[0].shape[0]
                 train_step += 1
