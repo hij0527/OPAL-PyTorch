@@ -48,7 +48,7 @@ def main(args):
     data_keys = ['observations', 'actions']
     trainer.train(model=opal, buffer=buffer, data_keys=data_keys, device=device,
                   num_epochs=args.epochs, batch_size=args.batch_size, num_workers=args.num_workers,
-                  beta=args.beta, eps_kld=args.eps_kld)
+                  truncate_normal=args.truncate_normal, eps_kld=args.eps_kld, beta=args.beta, beta2=args.beta2)
     print('#### Training Phase 1 End ####')
 
 

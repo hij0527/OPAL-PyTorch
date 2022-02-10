@@ -89,14 +89,18 @@ class OPAL:
         if self.optimizer:
             self.optimizer.load_state_dict(state_dict['optimizer'])
 
-    def _update(self, samples, beta=0.1, eps_kld=0.):  # shape of states: (batch_size, subtraj_size, dim_s)
+    def _update(self, samples, **kwargs):  # shape of states: (batch_size, subtraj_size, dim_s)
         states, actions = samples
         # shape of states: (batch_size, subtraj_size, dim_s)
         batch_size, subtraj_len = states.shape[0], states.shape[1]
 
         # sample z ~ q_phi(z|tau) using reparameterization
         mean_z, logstd_z = self.encoder(states[:, 0] if self.state_agnostic else states, actions)
-        z = Normal(mean_z, logstd_z.exp()).rsample()
+        eps = torch.randn_like(mean_z)
+        max_eps = kwargs.get('truncate_normal', None)
+        if max_eps:
+            eps = torch.fmod(eps, max_eps)  # truncate values outside of (-max_eps, max_eps)
+        z = mean_z + logstd_z.exp() * eps
 
         # negative log likelihood of Gaussian pi_theta (Eq. 1)
         # mean, logstd shape: (batch_size, c, dim_a)
@@ -108,17 +112,27 @@ class OPAL:
 
         # KL divergence between two Gaussian q_phi and rho_omega: KLD(q_phi||rho_omega) (Eq. 2)
         prior_mean_z, prior_logstd_z = self.prior(states[:, 0])
+        eps_kld = kwargs.get('eps_kld', 0.)
         loss_kld = gaussian_kld_loss(mean_z, logstd_z, prior_mean_z, prior_logstd_z, eps_kld)
 
+        # additional regularization
+        beta2 = kwargs.get('beta2', 0.)
+        if beta2:
+            unit_mean, unit_logstd = torch.zeros_like(mean_z), torch.zeros_like(logstd_z)
+            loss_reg = gaussian_kld_loss(mean_z, logstd_z, unit_mean, unit_logstd)
+        else:
+            loss_reg = torch.zeros_like(loss_kld)
+
         # update models
-        loss = loss_nll + beta * loss_kld
+        beta = kwargs.get('beta', 0.1)
+        loss = loss_nll + beta * loss_kld + beta2 * loss_reg
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
-        return loss.item(), {'nll': loss_nll.item(), 'kld': loss_kld.item()}
+        return loss.item(), {'nll': loss_nll.item(), 'kld': loss_kld.item(), 'reg': loss_reg.item()}
 
-    def _finetune(self, samples):
+    def _finetune(self, samples, **kwargs):
         states, actions, latents = samples
         batch_size, subtraj_len = states.shape[0], states.shape[1]
 

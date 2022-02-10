@@ -36,10 +36,12 @@ def parse_args():
     # phase 1: primitive training
     ap.add_argument('--epochs', type=int, default=100, help='number of epochs for phase 1')
     ap.add_argument('--batch_size', type=int, default=50, help='batch size for phase 1')
-    ap.add_argument('--num_workers', type=int, default=8, help='number of DataLoader workers')
+    ap.add_argument('--num_workers', type=int, default=6, help='number of DataLoader workers')
     ap.add_argument('--lr', type=float, default=1e-3, help='learning rate for phase 1')
-    ap.add_argument('--beta', type=float, default=0.1, help='weight of KL divergence in loss')
+    ap.add_argument('--truncate_normal', type=float, default=None, help='max sigma for sampling from normal')
     ap.add_argument('--eps_kld', type=float, default=0., help='upper bound for KL divergence contraint')
+    ap.add_argument('--beta', type=float, default=0.1, help='weight of KL divergence in loss')
+    ap.add_argument('--beta2', type=float, default=0., help='additional regularization weight (default: 0)')
 
     ap.add_argument('--print_freq', type=int, default=100, help='training log (stdout) frequency in steps')
     ap.add_argument('--log_freq', type=int, default=100, help='training log (tensorboard) frequency in steps')
