@@ -38,6 +38,7 @@ class BatchTrainer(BaseTrainer):
         data_loader = DataLoader(buffer, batch_size=batch_size, shuffle=True, num_workers=num_workers)
         fn_preproc = {k: (lambda x: x) for k in data_keys}
         fn_preproc.update(batch_preproc)
+        schedule_step_size = 1. / (num_epochs - 1) if num_epochs > 1 else 0.
         train_step = 0
 
         for epoch in range(1, num_epochs + 1):
@@ -46,7 +47,7 @@ class BatchTrainer(BaseTrainer):
             epoch_loss, num_data = 0., 0
 
             for k, (v_init, v_max) in param_schedule.items():
-                train_kwargs[k] = v_init + (v_max - v_init) * (epoch - 1) / (num_epochs - 1)
+                train_kwargs[k] = v_init + (v_max - v_init) * (epoch - 1) * schedule_step_size
 
             for i, batch in enumerate(data_loader):
                 batch_items = [fn_preproc[k](batch[k]).to(device) for k in data_keys]

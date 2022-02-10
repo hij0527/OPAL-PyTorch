@@ -41,7 +41,9 @@ def parse_args():
     ap.add_argument('--truncate_normal', type=float, default=None, help='max sigma for sampling from normal')
     ap.add_argument('--eps_kld', type=float, default=0., help='upper bound for KL divergence contraint')
     ap.add_argument('--beta', type=float, default=0.1, help='weight of KL divergence in loss')
-    ap.add_argument('--beta2', type=float, default=0., help='additional regularization weight (default: 0)')
+    ap.add_argument('--beta_final', type=float, default=None, help='if set, beta will linearly change to this value')
+    ap.add_argument('--beta2', type=float, default=0., help='weight of additional regularization (default: 0)')
+    ap.add_argument('--beta2_final', type=float, default=None, help='if set, beta2 will linearly change to this value')
 
     ap.add_argument('--print_freq', type=int, default=100, help='training log (stdout) frequency in steps')
     ap.add_argument('--log_freq', type=int, default=100, help='training log (tensorboard) frequency in steps')

@@ -46,8 +46,11 @@ def main(args):
     trainer = BatchTrainer(logger=logger, phase=1, tag='',
                            print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
     data_keys = ['observations', 'actions']
+    beta_schedule = (args.beta, args.beta_final if args.beta_final else args.beta)
+    beta2_schedule = (args.beta2, args.beta2_final if args.beta2_final else args.beta2)
     trainer.train(model=opal, buffer=buffer, data_keys=data_keys, device=device,
                   num_epochs=args.epochs, batch_size=args.batch_size, num_workers=args.num_workers,
+                  param_schedule={'beta': beta_schedule, 'beta2': beta2_schedule},
                   truncate_normal=args.truncate_normal, eps_kld=args.eps_kld, beta=args.beta, beta2=args.beta2)
     print('#### Training Phase 1 End ####')
 

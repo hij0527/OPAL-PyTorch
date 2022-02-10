@@ -130,7 +130,13 @@ class OPAL:
         loss.backward()
         self.optimizer.step()
 
-        return loss.item(), {'nll': loss_nll.item(), 'kld': loss_kld.item(), 'reg': loss_reg.item()}
+        return loss.item(), {
+            'nll': loss_nll.item(),
+            'kld': loss_kld.item(),
+            'reg': loss_reg.item(),
+            'beta': beta,
+            'beta2': beta2,
+        }
 
     def _finetune(self, samples, **kwargs):
         states, actions, latents = samples
