@@ -175,7 +175,7 @@ class SAC(nn.Module):
         dist_action = Normal(action_mean, action_logstd.exp())
         action = dist_action.rsample()
         if self.use_kld_as_entropy:  # use KL divergence to the prior in place of entropy
-            assert(prior_model is not None)
+            assert prior_model is not None
             with torch.no_grad():
                 prior_mean, prior_logstd = prior_model(state)
             entropy = gaussian_kld_loss(action_mean, action_logstd, prior_mean, prior_logstd, reduction='none')

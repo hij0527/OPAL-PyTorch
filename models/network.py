@@ -35,9 +35,13 @@ def _make_layers(dims, activation='relu', final_activation=False):
 
 class ProbabilisticModule(nn.Module):
     """Base module with last linear layers for mean and logstd"""
-    def __init__(self, dim_in, dim_out, init_method='normal', fixed_logstd=None):
+    def __init__(self, dim_in, dim_out, init_method='normal', fixed_logstd=None,
+                 logstd_min=-20, logstd_max=2):
         super().__init__()
         self.fixed_logstd = fixed_logstd
+        self.logstd_min = logstd_min
+        self.logstd_max = logstd_max
+
         self.fc_mean = _make_layers([dim_in, dim_out])
         self.fc_logstd = _make_layers([dim_in, dim_out])
         '''
@@ -58,6 +62,7 @@ class ProbabilisticModule(nn.Module):
         mean = self.fc_mean(x)
         if self.fixed_logstd is None:
             logstd = self.fc_logstd(x)
+            logstd = torch.clamp(logstd, min=self.logstd_min, max=self.logstd_max)
         else:
             logstd = torch.ones_like(mean) * self.fixed_logstd
         '''

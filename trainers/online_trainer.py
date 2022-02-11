@@ -99,7 +99,7 @@ class OnlineTrainer(BaseTrainer):
                         samples = replay_buffer.sample(size=batch_size, to_tensor=True, device=device)
                         loss, sublosses = model.update(samples)
 
-                    self.log_losses(total_step, loss, sublosses)
+                    self.log_losses(total_step, loss, sublosses)  # TODO: total_step might not be divisible by log_freq
 
             self.logger.log('phase2_reward_online/train', episode_reward, episode)
             print("[phase2_online, episode {}] total steps: {}, episode steps: {}, reward: {:.2f}, mem: {:d}".format(
