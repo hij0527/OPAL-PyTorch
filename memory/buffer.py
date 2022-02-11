@@ -3,36 +3,29 @@ from torch.utils.data import Dataset
 
 
 class Buffer(Dataset):
-    def __init__(self, domain_name, task_name, subtraj_len, normalize=False, verbose=False):
+    def __init__(self, domain_name, task_name, normalize=False, verbose=False):
         self.domain_name = domain_name
         self.task_name = task_name
-        self.subtraj_len = subtraj_len
         self.normalize = normalize
         self.verbose = verbose
 
         self.dataset = {}
-        self.terminal_indices = np.empty(0, dtype=int)
-        self.subtraj_indices = np.empty(0, dtype=int)
 
         if self.normalize:
             self.obs_mean = np.zeros(1)
             self.obs_std = np.ones(1)
 
     def __getitem__(self, index):
-        # return subtrajectories
-        subtraj_slice = np.arange(self.subtraj_len) + self.subtraj_indices[index]
         return {
-            'observations': self.dataset['observations'][subtraj_slice],
-            'actions': self.dataset['actions'][subtraj_slice],
-            'rewards': self.dataset['rewards'][subtraj_slice],
-            'next_observations': self.dataset['next_observations'][subtraj_slice],
-            'terminals': self.dataset['terminals'][subtraj_slice],
-            'latents': self.dataset['latents'][index] if 'latents' in self.dataset else np.empty(0),
+            'observations': self.dataset['observations'][index],
+            'actions': self.dataset['actions'][index],
+            'rewards': self.dataset['rewards'][index],
+            'next_observations': self.dataset['next_observations'][index],
+            'terminals': self.dataset['terminals'][index],
         }
 
     def __len__(self):
-        return 10000
-        return len(self.subtraj_indices)
+        return len(self.dataset['observations'])
 
     def normalize_observation(self, observation):
         if not self.normalize:
@@ -66,31 +59,10 @@ class Buffer(Dataset):
         elif self.domain_name == 'metaworld':
             raise NotImplementedError
 
-        # get starting indices of subtrajectories with length subtraj_len
-        terminal_indices = np.where(dataset['terminals'])[0]
-        terminal_indices = np.insert(terminal_indices, 0, -1)  # virtual terminal before the first transition
-        if terminal_indices[-1] != len(dataset['terminals']) - 1:
-            terminal_indices = np.append(terminal_indices, len(dataset['terminals']) - 1)  # treat the last transition as terminal
-
-        subtraj_indices = []
-        for i in range(1, len(terminal_indices)):
-            subtraj_indices += list(range(terminal_indices[i - 1] + 1, terminal_indices[i] - self.subtraj_len + 2))
-
         self.dataset = dataset
-        self.terminal_indices = terminal_indices
-        self.subtraj_indices = np.asarray(subtraj_indices)
 
         if self.verbose:
-            traj_lens = terminal_indices[1:] - terminal_indices[:-1]
-            traj_rets = np.array([dataset['rewards'][s+1:e+1].sum() for s, e in zip(terminal_indices[:-1], terminal_indices[1:])])
             print('[B]', 'Dataset loaded. size: {}'.format(len(dataset['observations'])))
-            print('[B]', '- number of trajectories: {}'.format(len(terminal_indices) - 1))
-            print('[B]', '  - average trajectory length: {:.1f} (min: {}, med: {}, max: {})'.format(
-                traj_lens.mean(), traj_lens.min(), np.median(traj_lens), traj_lens.max()))
-            print('[B]', '  - average return: {:.3f} (min: {:.2f}, med: {:.2f}, max: {:.2f})'.format(
-                traj_rets.mean(), traj_rets.min(), np.median(traj_rets), traj_rets.max()))
-            print('[B]', '- number of subtrajectories (length {}): {}'.format(
-                self.subtraj_len, len(subtraj_indices)))
 
         if self.normalize:
             obs = self.dataset['observations']
@@ -102,10 +74,69 @@ class Buffer(Dataset):
             if self.verbose:
                 print('[B]', 'Using normalized observations')
 
-        if sparse_reward:
+        if sparse_reward and 'rewards_sparse' in self.dataset:
             self.dataset['rewards'] = self.dataset['rewards_sparse']
             if self.verbose:
                 print('[B]', 'Using sparse reward')
+
+
+class SubtrajBuffer(Buffer):
+    def __init__(self,
+        domain_name,
+        task_name,
+        subtraj_len,
+        sliding_window=False,
+        normalize=False,
+        verbose=False,
+    ):
+        super().__init__(domain_name, task_name, normalize, verbose)
+        self.subtraj_len = subtraj_len
+        self.sliding_window = sliding_window
+
+        self.terminal_indices = np.empty(0, dtype=int)
+        self.subtraj_indices = np.empty(0, dtype=int)
+
+    def __getitem__(self, index):
+        """Get subtrajectories"""
+        subtraj_slice = np.arange(self.subtraj_len) + self.subtraj_indices[index]
+        item = super().__getitem__(subtraj_slice)
+        item['latents'] = self.dataset['latents'][index] if 'latents' in self.dataset else np.empty(0)
+        return item
+
+    def __len__(self):
+        return len(self.subtraj_indices)
+
+    def load_data(self, sparse_reward=False, data_dir='./data', policy_path=None):
+        super().load_data(sparse_reward, data_dir, policy_path)
+
+        # get subtrajectories
+        terminal_indices = np.where(self.dataset['terminals'])[0]
+        terminal_indices = np.insert(terminal_indices, 0, -1)  # virtual terminal before the first transition
+        if terminal_indices[-1] != len(self.dataset['terminals']) - 1:
+            # treat the last transition as terminal
+            terminal_indices = np.append(terminal_indices, len(self.dataset['terminals']) - 1)
+
+        # get starting indices of subtrajectories with length subtraj_len
+        subtraj_indices = []
+        index_step = 1 if self.sliding_window else self.subtraj_len
+        for i in range(1, len(terminal_indices)):
+            start_indices = range(terminal_indices[i - 1] + 1, terminal_indices[i] - self.subtraj_len + 2, index_step)
+            subtraj_indices += list(start_indices)
+        subtraj_indices = np.asarray(subtraj_indices)
+
+        self.terminal_indices = terminal_indices
+        self.subtraj_indices = subtraj_indices
+
+        if self.verbose:
+            traj_lens = terminal_indices[1:] - terminal_indices[:-1]
+            traj_rets = np.array([self.dataset['rewards'][s+1:e+1].sum() for s, e in zip(terminal_indices[:-1], terminal_indices[1:])])
+            print('[B]', '- number of trajectories: {}'.format(len(terminal_indices) - 1))
+            print('[B]', '  - average trajectory length: {:.1f} (min: {}, med: {}, max: {})'.format(
+                traj_lens.mean(), traj_lens.min(), np.median(traj_lens), traj_lens.max()))
+            print('[B]', '  - average return: {:.3f} (min: {:.2f}, med: {:.2f}, max: {:.2f})'.format(
+                traj_rets.mean(), traj_rets.min(), np.median(traj_rets), traj_rets.max()))
+            print('[B]', '- number of subtrajectories (length {}): {}'.format(
+                self.subtraj_len, len(subtraj_indices)))
 
     def add_latents(self, latents):
         assert(len(latents) == len(self))

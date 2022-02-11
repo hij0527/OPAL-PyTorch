@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from memory.buffer import Buffer
+from memory.buffer import SubtrajBuffer
 from models.opal import OPAL
 from params import parse_args
 from trainers.batch_trainer import BatchTrainer
@@ -33,12 +33,13 @@ def main(args):
         num_layers=args.num_layers,
         num_gru_layers=args.num_gru_layers,
         state_agnostic=args.state_agnostic,
+        unit_prior_std=args.unit_prior_std,
     )
     opal.init_optimizer(lr=args.lr)
 
     # set up initial offline dataset
-    buffer = Buffer(args.domain_name, args.task_name,
-                    subtraj_len=args.subtraj_len, normalize=args.normalize, verbose=args.verbose)
+    buffer = SubtrajBuffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len,
+                           sliding_window=args.sliding_window, normalize=args.normalize, verbose=args.verbose)
     buffer.load_data(sparse_reward=args.sparse_reward, data_dir=args.data_dir, policy_path=args.dataset_policy)
 
     # training phase 1: offline unsupervised primitive learning

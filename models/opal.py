@@ -17,6 +17,7 @@ class OPAL:
         num_layers=2,
         num_gru_layers=4,
         state_agnostic=False,
+        unit_prior_std=False,
     ):
         self.device = device
         self.state_agnostic = state_agnostic
@@ -34,7 +35,7 @@ class OPAL:
             self.primitive_policy = PrimitivePolicy(dim_s, dim_z, dim_a, hidden_size, num_layers).to(device)
 
         # prior (rho_omega)
-        self.prior = Prior(dim_s, dim_z, hidden_size, num_layers).to(device)
+        self.prior = Prior(dim_s, dim_z, hidden_size, num_layers, unit_prior_std=unit_prior_std).to(device)
 
         self.models = [self.encoder, self.primitive_policy, self.prior]
         self.optimizer = None
@@ -136,6 +137,7 @@ class OPAL:
             'reg': loss_reg.item(),
             'beta': beta,
             'beta2': beta2,
+            'precision': (1 / logstd_z.exp() ** 2).mean(),
         }
 
     def _finetune(self, samples, **kwargs):

@@ -3,7 +3,7 @@ import os
 import torch
 from torch.utils.data import DataLoader
 
-from memory.buffer import Buffer
+from memory.buffer import SubtrajBuffer
 from models.opal import OPAL
 from params_phase2 import parse_args
 import utils.env_utils as env_utils
@@ -12,6 +12,7 @@ import utils.python_utils as python_utils
 
 
 def main(args):
+    args.run_tag = args.run_tag or args.task_type
     logger = Logger(args)
 
     device = python_utils.get_device(args.gpu_id)
@@ -35,12 +36,13 @@ def main(args):
         num_layers=args.opal_num_layers,
         num_gru_layers=args.opal_num_gru_layers,
         state_agnostic=args.opal_state_agnostic,
+        unit_prior_std=args.opal_unit_prior_std,
     )
     opal.load_state_dict(torch.load(args.ckpt_path))
 
     # set up initial offline dataset
-    buffer = Buffer(args.domain_name, args.task_name,
-                    subtraj_len=args.subtraj_len, normalize=args.normalize, verbose=args.verbose)
+    buffer = SubtrajBuffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len,
+                           sliding_window=args.sliding_window, normalize=args.normalize, verbose=args.verbose)
     buffer.load_data(sparse_reward=args.sparse_reward, data_dir=args.data_dir, policy_path=args.dataset_policy)
 
     env = env_utils.PreprocObservation(env, buffer.normalize_observation)
@@ -149,7 +151,7 @@ def main(args):
     print('#### Training Phase 2 End ####')
 
 
-def label_dataset(buffer: Buffer, opal: OPAL, args, device):
+def label_dataset(buffer: SubtrajBuffer, opal: OPAL, args, device):
     if args.load_latent_buffer:
         print('Loading labeled dataset from: {}'.format(args.load_latent_buffer))
         latent_buffer = np.load(args.load_latent_buffer)
@@ -175,7 +177,8 @@ def label_dataset(buffer: Buffer, opal: OPAL, args, device):
 
 def get_expert_demos(args, normalize_fn):
     # TODO: 10 successful trajectories
-    demos = Buffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len, normalize=False, verbose=args.verbose)
+    demos = SubtrajBuffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len,
+                          sliding_window=args.sliding_window, normalize=False, verbose=args.verbose)
     # demos.load_expert_demos(sparse_reward=args.sparse_reward, data_dir=args.data_dir)
     demos.load_data(sparse_reward=args.sparse_reward, data_dir=args.data_dir, policy_path=args.dataset_policy)  # TEMPORARY
     demos.dataset['observations'] = normalize_fn(demos.dataset['observations'])

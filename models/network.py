@@ -35,17 +35,35 @@ def _make_layers(dims, activation='relu', final_activation=False):
 
 class ProbabilisticModule(nn.Module):
     """Base module with last linear layers for mean and logstd"""
-    def __init__(self, dim_in, dim_out, init_method='normal'):
+    def __init__(self, dim_in, dim_out, init_method='normal', fixed_logstd=None):
         super().__init__()
-        self.fc_mu = _make_layers([dim_in, dim_out])
+        self.fixed_logstd = fixed_logstd
+        self.fc_mean = _make_layers([dim_in, dim_out])
         self.fc_logstd = _make_layers([dim_in, dim_out])
+        '''
+        if fixed_logstd is None:
+            self.fc_logstd = _make_layers([dim_in, dim_out])
+        else:
+            self.logstd = nn.Parameter(torch.ones(dim_out) * fixed_logstd, requires_grad=False)
+        '''
 
-        self.fc_mu.apply(partial(_weight_init, init_method=init_method))
+        self.fc_mean.apply(partial(_weight_init, init_method=init_method))
         self.fc_logstd.apply(partial(_weight_init, init_method=init_method))
+        '''
+        if fixed_logstd is None:
+            self.fc_logstd.apply(partial(_weight_init, init_method=init_method))
+        '''
 
     def forward(self, x):
-        mean = self.fc_mu(x)
-        logstd = self.fc_logstd(x)
+        mean = self.fc_mean(x)
+        if self.fixed_logstd is None:
+            logstd = self.fc_logstd(x)
+        else:
+            logstd = torch.ones_like(mean) * self.fixed_logstd
+        '''
+        else:
+            logstd = self.logstd.copy()
+        '''
         return mean, logstd
 
 
@@ -114,8 +132,8 @@ class PrimitivePolicyStateAgnostic(ProbabilisticModule):  # pi_theta(a1...ac|z)
 
 
 class Prior(ProbabilisticModule):  # rho_omega(z|s)
-    def __init__(self, dim_s, dim_z, hidden_size=200, num_layers=2):
-        super().__init__(hidden_size, dim_z)
+    def __init__(self, dim_s, dim_z, hidden_size=200, num_layers=2, unit_prior_std=False):
+        super().__init__(hidden_size, dim_z, fixed_logstd=0. if unit_prior_std else None)
         self.fc1 = _make_layers([dim_s] + [hidden_size] * num_layers, final_activation=True)
 
         self.fc1.apply(_weight_init)

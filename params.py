@@ -4,7 +4,6 @@ import os
 import utils.env_utils as env_utils
 
 
-
 def parse_args():
     ap = argparse.ArgumentParser()
 
@@ -25,6 +24,7 @@ def parse_args():
     ap.add_argument('--normalize', action='store_true', help='set to normalize states')
     ap.add_argument('--subtraj_len', '-C', metavar='c', type=int, default=10, help='length of subtrajectory (c)')
     ap.add_argument('--subtraj_num', '-N', metavar='N', type=int, default=-1, help='number of subtrajectories for phase 1 (N)')
+    ap.add_argument('--sliding_window', action='store_true', help='if set, use sliding window for splitting subtrajectories')
     ap.add_argument('--latent_dim', '-Z', metavar='dim_Z', type=int, default=8, help='dimension of primitive latent vector (dim(Z))')
 
     # model parameters
@@ -32,6 +32,7 @@ def parse_args():
     ap.add_argument('--num_layers', type=int, default=2, help='number of hidden layers')
     ap.add_argument('--num_gru_layers', type=int, default=4, help='number of GRU layers')
     ap.add_argument('--state_agnostic', action='store_true', help='if set, use state agnostic models')
+    ap.add_argument('--unit_prior_std', action='store_true', help='if set, use fixed std=1 for prior')
 
     # phase 1: primitive training
     ap.add_argument('--epochs', type=int, default=100, help='number of epochs for phase 1')

@@ -4,13 +4,12 @@ import os
 import utils.env_utils as env_utils
 
 
-
 def parse_args():
     ap = argparse.ArgumentParser()
 
     ap.add_argument('--ckpt_path', type=str, required=True, help='phase 1 checkpoint path')
 
-    ap.add_argument('--run_tag', type=str, default='task', help='tag to run id (default: opal)')
+    ap.add_argument('--run_tag', type=str, default=None, help='tag to run id (default: same as task_type)')
     ap.add_argument('--no_timetag', action='store_true', help='if set, do not append time string to run id')
     ap.add_argument('--seed', type=int, default=None, help='random seed (default: None)')
     ap.add_argument('--gpu_id', type=str, default=None, help='GPU IDs to use. ex: 1,2 (default: None)')
@@ -27,6 +26,7 @@ def parse_args():
     ap.add_argument('--normalize', action='store_true', help='set to normalize states')
     ap.add_argument('--subtraj_len', '-C', metavar='c', type=int, default=10, help='length of subtrajectory (c)')
     ap.add_argument('--subtraj_num', '-N', metavar='N', type=int, default=-1, help='number of subtrajectories for phase 1 (N)')
+    ap.add_argument('--sliding_window', action='store_true', help='if set, use sliding window for splitting subtrajectories')
     ap.add_argument('--latent_dim', '-Z', metavar='dim_Z', type=int, default=8, help='dimension of primitive latent vector (dim(Z))')
 
     # model parameters
@@ -34,6 +34,7 @@ def parse_args():
     ap.add_argument('--opal_num_layers', type=int, default=2, help='OPAL: number of hidden layers')
     ap.add_argument('--opal_num_gru_layers', type=int, default=4, help='OPAL: number of GRU layers')
     ap.add_argument('--opal_state_agnostic', action='store_true', help='OPAL: if set, use state agnostic models')
+    ap.add_argument('--opal_unit_prior_std', action='store_true', help='OPAL: if set, use fixed std=1 for prior')
 
     ap.add_argument('--hidden_size', type=int, default=256, help='size of hidden layers (H)')
     ap.add_argument('--num_layers', type=int, default=3, help='number of hidden layers')
@@ -46,9 +47,9 @@ def parse_args():
     # phase 2: downstream task training
     ap.add_argument('--task_type', type=str, choices=['offline', 'imitation', 'online', 'multitask'], default='offline', help='downstream task type')
     ap.add_argument('--policy_type', type=str, choices=['cql', 'bc', 'sac', 'ppo'], default='cql', help='RL algorithm to use for downstream learning')
-    ap.add_argument('--batch_size', type=int, default=50, help='batch size for phase 1')
-    ap.add_argument('--num_workers', type=int, default=8, help='number of DataLoader workers')
-    ap.add_argument('--lr', type=float, default=1e-3, help='learning rate for phase 1')
+    ap.add_argument('--batch_size', type=int, default=50, help='batch size for phase 2')
+    ap.add_argument('--num_workers', type=int, default=6, help='number of DataLoader workers')
+    ap.add_argument('--lr', type=float, default=3e-4, help='learning rate for phase 2')
 
     ap.add_argument('--print_freq', type=int, default=200, help='training log (stdout) frequency in steps')
     ap.add_argument('--log_freq', type=int, default=200, help='training log (tensorboard) frequency in steps')
@@ -79,7 +80,7 @@ def parse_args():
 
     args = ap.parse_args()
 
-    for attr in ['results_root', 'dataset_policy']:
+    for attr in ['results_root', 'dataset_policy', 'ckpt_path']:
         val = getattr(args, attr)
         setattr(args, attr, os.path.expanduser(val) if val else val)
 
