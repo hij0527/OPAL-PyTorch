@@ -33,6 +33,8 @@ class SAC(nn.Module):
         automatic_entropy_tuning=True,
         max_entropy_range=100.,
         use_kld_as_entropy=False,
+        action_tanh=False,
+        action_scale_bias=(1, 0),
     ):
         super().__init__()
         self.gamma = gamma
@@ -40,15 +42,16 @@ class SAC(nn.Module):
         self.alpha = torch.as_tensor(alpha, dtype=torch.float32)
         self.max_entropy_range = max_entropy_range
         self.use_kld_as_entropy = use_kld_as_entropy
+        self.action_tanh = action_tanh
+        self.action_scale_bias = action_scale_bias
 
         self.target_update_interval = target_update_interval
         self.automatic_entropy_tuning = automatic_entropy_tuning
 
-        self.critic1 = QNetwork(dim_s, dim_a, hidden_size, num_layers)
-        self.critic2 = QNetwork(dim_s, dim_a, hidden_size, num_layers)
-
-        self.critic_target1 = QNetwork(dim_s, dim_a, hidden_size, num_layers)
-        self.critic_target2 = QNetwork(dim_s, dim_a, hidden_size, num_layers)
+        self.critic1 = QNetwork(dim_s, dim_a, hidden_size, num_layers=2)
+        self.critic2 = QNetwork(dim_s, dim_a, hidden_size, num_layers=2)
+        self.critic_target1 = QNetwork(dim_s, dim_a, hidden_size, num_layers=2)
+        self.critic_target2 = QNetwork(dim_s, dim_a, hidden_size, num_layers=2)
         hard_update(self.critic_target1, self.critic1)
         hard_update(self.critic_target2, self.critic2)
 
@@ -65,7 +68,11 @@ class SAC(nn.Module):
         self.update_step = 0
 
     def forward(self, observations):
-        return self.policy(observations)
+        mean, logstd = self.policy(observations)
+        if self.action_tanh:
+            mean = torch.tanh(mean)
+        mean = mean * self.action_scale_bias[0] + self.action_scale_bias[1]
+        return mean, logstd
 
     def init_optimizers(self, lr_actor=3e-4, lr_critic=3e-4):
         self.critic_optim = Adam(list(self.critic1.parameters()) + list(self.critic2.parameters()), lr=lr_critic)
@@ -120,7 +127,7 @@ class SAC(nn.Module):
             self.alpha = torch.clamp(self.log_alpha.exp().detach(), max=1e6)  # TODO: check if it's right thing to do (detach)
             curr_alpha = self.alpha.clone()
         else:
-            alpha_loss = torch.tensor(0.)
+            alpha_loss = torch.tensor(0.).to(policy_loss.device)
             curr_alpha = torch.tensor(self.alpha)
 
         if self.update_step % self.target_update_interval == 0:
@@ -170,16 +177,24 @@ class SAC(nn.Module):
                 self.alpha_optim.load_state_dict(state_dict['alpha_optimizer'])
 
     def _sample_action_with_entropy(self, state, prior_model=None):
-        # TODO: tanh, action scaling
         action_mean, action_logstd = self.policy(state)
         dist_action = Normal(action_mean, action_logstd.exp())
-        action = dist_action.rsample()
+        raw_action = dist_action.rsample()
+        if self.action_tanh:
+            action = torch.tanh(raw_action)
+        else:
+            action = raw_action
+        action = action * self.action_scale_bias[0] + self.action_scale_bias[1]
+
         if self.use_kld_as_entropy:  # use KL divergence to the prior in place of entropy
             assert prior_model is not None
             with torch.no_grad():
                 prior_mean, prior_logstd = prior_model(state)
             entropy = gaussian_kld_loss(action_mean, action_logstd, prior_mean, prior_logstd, reduction='none')
         else:
-            entropy = dist_action.log_prob(action).sum(-1)
+            entropy = dist_action.log_prob(raw_action)
+            if self.action_tanh:
+                entropy -= torch.log(1 - action.pow(2) + 1e-6)
+            entropy = entropy.sum(-1)
         entropy.clamp_(-self.max_entropy_range, self.max_entropy_range)
         return action, entropy.unsqueeze(-1)  # match shape with Q output
