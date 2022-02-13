@@ -14,8 +14,8 @@ def main(args):
     logger = Logger(args)
 
     device = python_utils.get_device(args.gpu_id)
-    env = env_utils.get_env(args.domain_name, args.task_name)
-    python_utils.seed_all(args.seed, env)
+    python_utils.seed_all(args.seed)
+    env = env_utils.get_env(args.domain_name, args.task_name, seed=args.seed)
 
     dim_s = np.prod(env.observation_space.shape)
     dim_a = np.prod(env.action_space.shape)

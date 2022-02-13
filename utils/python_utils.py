@@ -13,7 +13,7 @@ def get_device(gpu_id=None):
     return torch.device(device)
 
 
-def seed_all(seed=None, env=None):
+def seed_all(seed=None):
     if seed is None:
         return
 
@@ -22,10 +22,6 @@ def seed_all(seed=None, env=None):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
-    if env is not None:
-        env.seed(seed)
-        if hasattr(env.action_space, 'seed') and callable(env.action_space.seed):
-            env.action_space.seed(seed)
 
 
 class SuppressStdout:
