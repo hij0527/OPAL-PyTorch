@@ -8,7 +8,7 @@ class Logger:
     def __init__(self, args):
         self.results_root = args.results_root
 
-        self.run_id = '{}_{}'.format(args.run_tag, args.seed)
+        self.run_id = '{}_{}_{}_{}'.format(args.run_tag, args.domain_name, args.task_name, args.seed)
         if not args.no_timetag:
             self.run_id += '_{}'.format(time.time())
         print('Run ID: {}'.format(self.run_id))

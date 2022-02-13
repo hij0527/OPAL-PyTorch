@@ -55,9 +55,19 @@ class Buffer(Dataset):
                 verbose=self.verbose,
             ))
         elif self.domain_name == 'kitchen':
-            raise NotImplementedError
+            import argparse
+            from utils.kitchen_dataset import get_dataset
+            dataset = get_dataset(argparse.Namespace(
+                task=self.task_name,
+                data_dir=data_dir,
+            ))
         elif self.domain_name == 'metaworld':
-            raise NotImplementedError
+            import argparse
+            from utils.metaworld_dataset import get_dataset
+            dataset = get_dataset(argparse.Namespace(
+                task=self.task_name,
+                data_dir=data_dir,
+            ))
 
         self.dataset = dataset
 
@@ -78,6 +88,25 @@ class Buffer(Dataset):
             self.dataset['rewards'] = self.dataset['rewards_sparse']
             if self.verbose:
                 print('[B]', 'Using sparse reward')
+
+    def load_expert_demos(self, sparse_reward=False, data_dir='./data', policy_path=None, num_demos=10):
+        # TODO
+        # TEMPORARY - select 10 episodes from original data
+        self.load_data(sparse_reward, data_dir, policy_path)
+        terminal_indices = np.where(self.dataset['terminals'])[0]
+        selected = np.random.choice(range(len(terminal_indices) - 1), num_demos, replace=False)
+        indicies = []
+        for tid in selected:
+            indicies += list(range(terminal_indices[tid] + 1, terminal_indices[tid + 1] + 1))
+        self.dataset = {
+            'observations': self.dataset['observations'][indicies],
+            'actions': self.dataset['actions'][indicies],
+            'rewards': self.dataset['rewards'][indicies],
+            'next_observations': self.dataset['next_observations'][indicies],
+            'terminals': self.dataset['terminals'][indicies],
+        }
+        if self.verbose:
+            print('[B]', 'Expert demos: {}'.format(len(self.dataset['observations'])))
 
 
 class SubtrajBuffer(Buffer):
@@ -108,7 +137,28 @@ class SubtrajBuffer(Buffer):
 
     def load_data(self, sparse_reward=False, data_dir='./data', policy_path=None):
         super().load_data(sparse_reward, data_dir, policy_path)
+        self._split_subtrajectories()
 
+    def load_expert_demos(self, sparse_reward=False, data_dir='./data', policy_path=None, num_demos=10):
+        super().load_expert_demos(sparse_reward, data_dir, policy_path, num_demos)
+        self._split_subtrajectories()
+
+    def add_latents(self, latents):
+        assert(len(latents) == len(self))
+        self.dataset['latents'] = latents.copy()
+
+    def get_labeled_dataset(self):
+        indices = self.subtraj_indices
+        c = self.subtraj_len
+        return {
+            'observations': self.dataset['observations'][indices],  # s_0
+            'actions': self.dataset['latents'],  # z
+            'rewards': np.convolve(self.dataset['rewards'], np.ones(c), 'valid').astype(np.float32),  # sum(r_0,...,r_{c-1})
+            'next_observations': self.dataset['next_observations'][indices + c - 1],  # s_c
+            'terminals': self.dataset['terminals'][indices + c - 1],  # terminal_{c-1}
+        }
+
+    def _split_subtrajectories(self):
         # get subtrajectories
         terminal_indices = np.where(self.dataset['terminals'])[0]
         terminal_indices = np.insert(terminal_indices, 0, -1)  # virtual terminal before the first transition
@@ -137,21 +187,6 @@ class SubtrajBuffer(Buffer):
                 traj_rets.mean(), traj_rets.min(), np.median(traj_rets), traj_rets.max()))
             print('[B]', '- number of subtrajectories (length {}): {}'.format(
                 self.subtraj_len, len(subtraj_indices)))
-
-    def add_latents(self, latents):
-        assert(len(latents) == len(self))
-        self.dataset['latents'] = latents.copy()
-
-    def get_labeled_dataset(self):
-        indices = self.subtraj_indices
-        c = self.subtraj_len
-        return {
-            'observations': self.dataset['observations'][indices],  # s_0
-            'actions': self.dataset['latents'],  # z
-            'rewards': np.convolve(self.dataset['rewards'], np.ones(c), 'valid').astype(np.float32),  # sum(r_0,...,r_{c-1})
-            'next_observations': self.dataset['next_observations'][indices + c - 1],  # s_c
-            'terminals': self.dataset['terminals'][indices + c - 1],  # terminal_{c-1}
-        }
 
 
 class FixedBuffer(Dataset):

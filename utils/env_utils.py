@@ -69,7 +69,7 @@ def get_metaworld_mt_env(mt_type, seed, task_agnostic):
     elif mt_type == 'mt50':
         benchmark_cls = metaworld.MT50
     else:
-        raise NotImplementedError
+        raise ValueError
 
     benchmark = benchmark_cls(seed=seed)
     training_envs = []
@@ -79,7 +79,7 @@ def get_metaworld_mt_env(mt_type, seed, task_agnostic):
         env.set_task(task)
         training_envs.append(env)
 
-    return MultiTaskEnv(training_envs, mode='del-onehot' if task_agnostic else 'vanilla')
+    return MultiTaskEnv(training_envs, mode='vanilla' if task_agnostic else 'add-onehot')
 
 
 def get_env(domain_name, task_name, seed=None, task_agnostic=False):
