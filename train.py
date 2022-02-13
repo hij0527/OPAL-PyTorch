@@ -52,7 +52,8 @@ def main(args):
     trainer.train(model=opal, buffer=buffer, data_keys=data_keys, device=device,
                   num_epochs=args.epochs, batch_size=args.batch_size, num_workers=args.num_workers,
                   param_schedule={'beta': beta_schedule, 'beta2': beta2_schedule},
-                  truncate_normal=args.truncate_normal, eps_kld=args.eps_kld, beta=args.beta, beta2=args.beta2)
+                  truncate_normal=args.truncate_normal, eps_kld=args.eps_kld, beta=args.beta, beta2=args.beta2,
+                  grad_clip_steps=args.grad_clip_steps, grad_clip_val=args.grad_clip_val)
     print('#### Training Phase 1 End ####')
 
 

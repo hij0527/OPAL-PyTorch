@@ -75,7 +75,6 @@ class PPO(nn.Module):
             print('decay action_std to: {:.6f}'.format(self.action_std))
 
     def update(self, samples, primitive_policy, num_updates=80, lambda_ent=0.01):
-        self.update_step += 1
         # TODO: task idx
         state_batch, primitive_batch, logprob_batch, action_batch, reward_batch, done_batch = samples
 
@@ -138,9 +137,10 @@ class PPO(nn.Module):
         hard_update(self.critic_old, self.critic)
 
         # Decay action std of ouput action distribution
-        if self.action_std_decay_freq > 0 and self.update_step % self.action_std_decay_freq == 0:
+        if self.action_std_decay_freq > 0 and (self.update_step + 1) % self.action_std_decay_freq == 0:
             self.decay_action_std()
 
+        self.update_step += 1
         return mean_loss.item(), sublosses
 
     def state_dict(self):

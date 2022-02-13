@@ -81,7 +81,6 @@ class SAC(nn.Module):
             self.alpha_optim = Adam([self.log_alpha], lr=lr_actor)
 
     def update(self, samples, prior_model=None):
-        self.update_step += 1
         state_batch, action_batch, reward_batch, next_state_batch, done_batch = samples
         reward_batch = reward_batch.unsqueeze(1)
         mask_batch = torch.logical_not(done_batch).to(state_batch.dtype).unsqueeze(1)
@@ -130,10 +129,11 @@ class SAC(nn.Module):
             alpha_loss = torch.tensor(0.).to(policy_loss.device)
             curr_alpha = torch.tensor(self.alpha)
 
-        if self.update_step % self.target_update_interval == 0:
+        if (self.update_step + 1) % self.target_update_interval == 0:
             soft_update(self.critic_target1, self.critic1, self.tau)
             soft_update(self.critic_target2, self.critic2, self.tau)
 
+        self.update_step += 1
         return policy_loss.item(), {
             'qf1': qf1_loss.item(),
             'qf2': qf2_loss.item(),

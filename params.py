@@ -45,6 +45,8 @@ def parse_args():
     ap.add_argument('--beta_final', type=float, default=None, help='if set, beta will linearly change to this value')
     ap.add_argument('--beta2', type=float, default=0., help='weight of additional regularization (default: 0)')
     ap.add_argument('--beta2_final', type=float, default=None, help='if set, beta2 will linearly change to this value')
+    ap.add_argument('--grad_clip_val', type=float, default=0.001, help='gradient clipping value')
+    ap.add_argument('--grad_clip_steps', type=int, default=100, help='steps to apply gradient clipping (set to -1 for always)')
 
     ap.add_argument('--print_freq', type=int, default=100, help='training log (stdout) frequency in steps')
     ap.add_argument('--log_freq', type=int, default=100, help='training log (tensorboard) frequency in steps')

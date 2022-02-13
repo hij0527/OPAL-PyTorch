@@ -40,6 +40,8 @@ class OPAL:
         self.models = [self.encoder, self.primitive_policy, self.prior]
         self.optimizer = None
 
+        self.update_step = 0
+
     def init_optimizer(self, lr):
         self.optimizer = Adam([p for m in self.models for p in list(m.parameters())], lr=lr)
 
@@ -129,8 +131,16 @@ class OPAL:
         loss = loss_nll + beta * loss_kld + beta2 * loss_reg
         self.optimizer.zero_grad()
         loss.backward()
+
+        grad_clip_steps = kwargs.get('grad_clip_steps', 0)
+        if grad_clip_steps < 0 or self.update_step < grad_clip_steps:
+            # clip gradients
+            clip_val = kwargs.get('grad_clip_val', 10.)
+            for model in self.models:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_val)
         self.optimizer.step()
 
+        self.update_step += 1
         return loss.item(), {
             'nll': loss_nll.item(),
             'kld': loss_kld.item(),

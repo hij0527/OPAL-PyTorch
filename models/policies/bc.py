@@ -26,7 +26,6 @@ class BC(nn.Module):
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
 
     def update(self, samples):
-        self.update_step += 1
         state_batch, action_batch = samples
 
         mean_a, logstd_a = self.policy(state_batch)
@@ -36,6 +35,7 @@ class BC(nn.Module):
         loss.backward()
         self.optimizer.step()
 
+        self.update_step += 1
         return loss.item(), {'bc': loss.item()}
 
     # Save model parameters
