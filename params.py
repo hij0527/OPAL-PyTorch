@@ -19,7 +19,6 @@ def parse_args():
 
     ap.add_argument('--domain_name', type=str, choices=env_utils.DOMAIN_NAMES, default=env_utils.DOMAIN_NAMES[0], help='environment domain name')
     ap.add_argument('--task_name', type=str, choices=env_utils.TASK_NAMES, default=env_utils.TASK_NAMES[0], help='environment task name')
-    ap.add_argument('--sparse_reward', action='store_true', help='sparse reward mode')
     ap.add_argument('--dataset_size', type=int, default=int(1e6), help='size of offline dataset for phase 1')
     ap.add_argument('--normalize', action='store_true', help='set to normalize states')
     ap.add_argument('--subtraj_len', '-C', metavar='c', type=int, default=10, help='length of subtrajectory (c)')

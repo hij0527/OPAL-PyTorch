@@ -7,7 +7,7 @@ import utils.env_utils as env_utils
 def parse_args():
     ap = argparse.ArgumentParser()
 
-    ap.add_argument('--ckpt_path', type=str, required=True, help='phase 1 checkpoint path')
+    ap.add_argument('--opal_ckpt', type=str, required=True, help='phase 1 checkpoint path')
 
     ap.add_argument('--run_tag', type=str, default=None, help='tag to run id (default: same as task_type)')
     ap.add_argument('--no_timetag', action='store_true', help='if set, do not append time string to run id')
@@ -56,31 +56,33 @@ def parse_args():
     ap.add_argument('--save_freq', type=int, default=100, help='model save frequency in epochs/episodes')
 
     # offline
-    ap.add_argument('--offline_finetune_epochs', type=int, default=100, help='')
+    ap.add_argument('--offline_finetune_epochs', type=int, default=30, help='')
     ap.add_argument('--offline_task_epochs', type=int, default=100, help='')
 
     # imitation
-    ap.add_argument('--imitation_finetune_epochs', type=int, default=100, help='')
+    ap.add_argument('--imitation_expert_policy', type=str, default=None, help='path to policy file for expert demo collection')
+    ap.add_argument('--imitation_num_demos', type=int, default=10, help='')
+    ap.add_argument('--imitation_finetune_epochs', type=int, default=50, help='')
     ap.add_argument('--imitation_task_epochs', type=int, default=100, help='')
 
     # online
-    ap.add_argument('--online_train_episodes', type=int, default=3000, help='')
-    ap.add_argument('--online_train_start_step', type=int, default=3000, help='')
+    ap.add_argument('--online_train_steps', type=int, default=int(2.5e6), help='')
+    ap.add_argument('--online_init_random_steps', type=int, default=10000, help='')
     ap.add_argument('--online_updates_per_step', type=int, default=1, help='')
     ap.add_argument('--online_batch_size', type=int, default=256, help='')
     ap.add_argument('--online_eval_freq', type=int, default=10, help='')
     ap.add_argument('--online_eval_episodes', type=int, default=5, help='')
 
     # multi-task
-    ap.add_argument('--multitask_train_episodes', type=int, default=3000, help='')
-    ap.add_argument('--multitask_update_freq', type=int, default=4000, help='')
+    ap.add_argument('--multitask_train_steps', type=int, default=int(1e7), help='')
+    ap.add_argument('--multitask_update_interval', type=int, default=4000, help='')
     ap.add_argument('--multitask_updates_per_step', type=int, default=80, help='')
     ap.add_argument('--multitask_eval_freq', type=int, default=10, help='')
     ap.add_argument('--multitask_eval_episodes', type=int, default=5, help='')
 
     args = ap.parse_args()
 
-    for attr in ['results_root', 'dataset_policy', 'ckpt_path']:
+    for attr in ['results_root', 'dataset_policy', 'opal_ckpt']:
         val = getattr(args, attr)
         setattr(args, attr, os.path.expanduser(val) if val else val)
 

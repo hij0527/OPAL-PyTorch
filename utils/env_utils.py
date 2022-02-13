@@ -36,8 +36,8 @@ _ENV_NAMES = {
     ('antmaze', 'large'): 'antmaze-large-diverse-v2',
     ('kitchen', 'partial'): 'kitchen-partial-v0',
     ('kitchen', 'mixed'): 'kitchen-mixed-v0',
-    ('metaworld', 'mt10'): '',
-    ('metaworld', 'mt50'): '',
+    ('metaworld', 'mt10'): 'metaworld-mt10-v2',
+    ('metaworld', 'mt50'): 'metaworld-mt50-v2',
 }
 
 
@@ -63,7 +63,7 @@ def get_antmaze_env(maze, multi_start=True, eval=False):
     return NormalizedBoxEnv(ant.AntMazeEnv(maze_map=maze_map, maze_size_scaling=4.0, non_zero_reset=multi_start, eval=eval))
 
 
-def get_metaworld_mt_env(mt_type, seed, task_agnostic):
+def get_metaworld_mt_env(env_name, mt_type, seed, task_agnostic):
     if mt_type == 'mt10':
         benchmark_cls = metaworld.MT10
     elif mt_type == 'mt50':
@@ -79,7 +79,7 @@ def get_metaworld_mt_env(mt_type, seed, task_agnostic):
         env.set_task(task)
         training_envs.append(env)
 
-    return MultiTaskEnv(training_envs, mode='vanilla' if task_agnostic else 'add-onehot')
+    return MultiTaskEnv(training_envs, env_name, mode='vanilla' if task_agnostic else 'add-onehot')
 
 
 def get_env(domain_name, task_name, seed=None, task_agnostic=False):
@@ -90,7 +90,7 @@ def get_env(domain_name, task_name, seed=None, task_agnostic=False):
             env = gym.make(env_name)
             # env = get_antmaze_env(maze=task_name, multi_start=True, eval=True)
     elif env_type == 'metaworld':
-        env = get_metaworld_mt_env(task_name, seed, task_agnostic)
+        env = get_metaworld_mt_env(env_name, task_name, seed, task_agnostic)
     env.seed(seed)
     if hasattr(env.action_space, 'seed') and callable(env.action_space.seed):
         env.action_space.seed(seed)
@@ -124,7 +124,7 @@ class MultiTaskEnv(gym.Wrapper):
     Code adopted from https://github.com/rlworkgroup/garage/blob/master/src/garage/envs/multi_env_wrapper.py
     """
 
-    def __init__(self, envs, mode='vanilla'):
+    def __init__(self, envs, name, mode='vanilla'):
         assert mode in ['vanilla', 'add-onehot', 'del-onehot']
         super().__init__(envs[0])
         assert all(env.observation_space.shape == envs[0].observation_space.shape for env in envs)
@@ -134,6 +134,7 @@ class MultiTaskEnv(gym.Wrapper):
         self.num_tasks = len(envs)
         self.mode = mode
         self.active_task_index = None
+        self.is_metaworld = isinstance(self.envs[0], metaworld.envs.mujoco.mujoco_env.MujocoEnv)
 
         self._task_space = gym.spaces.Box(low=np.zeros(self.num_tasks), high=np.zeros(self.num_tasks))
 
@@ -146,23 +147,47 @@ class MultiTaskEnv(gym.Wrapper):
             obs_low, obs_high = obs_low[:-self.num_tasks], obs_high[:-self.num_tasks]
         self._observation_space = gym.spaces.Box(low=obs_low, high=obs_high)
 
+        if self.is_metaworld:
+            self.max_episode_length = self.envs[0].max_path_length
+        else:
+            self.max_episode_length = self.envs[0].spec.max_episode_length
+
+        self._spec = gym.envs.registration.EnvSpec(id=name)
+        self._spec.max_episode_length = self.max_episode_length
+
+        self._timestep = 0
+
     @property
     def observation_space(self):
         return self._observation_space
 
     @property
+    def base_observation_shape(self):
+        return self.env.observation_space.shape
+
+    @property
     def task_space(self):
         return self._task_space
+
+    @property
+    def spec(self):
+        return self._spec
 
     def reset(self):
         self.active_task_index = random.randint(0, self.num_tasks - 1)
         obs = self.envs[self.active_task_index].reset()
+        self._timestep = 0
         return self._preproc_obs(obs)
 
     def step(self, action):
         obs, reward, done, info = self.envs[self.active_task_index].step(action)
         if 'task_id' not in info:
             info['task_id'] = self.active_task_index
+        if self.is_metaworld:
+            done |= bool(info['success'])
+        self._timestep += 1
+        if self._timestep >= self.max_episode_length:
+            done = True
         return self._preproc_obs(obs), reward, done, info
 
     def seed(self, seed):
@@ -171,6 +196,11 @@ class MultiTaskEnv(gym.Wrapper):
             if hasattr(env.action_space, 'seed') and callable(env.action_space.seed):
                 env.action_space.seed(seed)
         return super().seed(seed)
+
+    def get_base_observation(self, obs):
+        if self.mode == 'add-onehot':
+            obs = obs[:-self.num_tasks]
+        return obs
 
     def _preproc_obs(self, obs):
         if self.mode == 'add-onehot':

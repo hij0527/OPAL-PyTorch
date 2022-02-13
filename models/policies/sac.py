@@ -29,19 +29,23 @@ class SAC(nn.Module):
         gamma=0.99,
         tau=5e-3,
         alpha=0.2,
+        alpha_min=0.001,
+        alpha_max=1e6,
         target_update_interval=1,
         automatic_entropy_tuning=True,
         max_entropy_range=100.,
-        use_kld_as_entropy=False,
+        use_kld_penalty=False,
         action_tanh=False,
         action_scale_bias=(1, 0),
     ):
         super().__init__()
         self.gamma = gamma
         self.tau = tau
-        self.alpha = torch.as_tensor(alpha, dtype=torch.float32)
+        self.alpha = alpha
+        self.alpha_min = alpha_min
+        self.alpha_max = alpha_max
         self.max_entropy_range = max_entropy_range
-        self.use_kld_as_entropy = use_kld_as_entropy
+        self.use_kld_penalty = use_kld_penalty
         self.action_tanh = action_tanh
         self.action_scale_bias = action_scale_bias
 
@@ -56,7 +60,7 @@ class SAC(nn.Module):
         hard_update(self.critic_target2, self.critic2)
 
         if self.automatic_entropy_tuning:
-            self.target_entropy = 1. if use_kld_as_entropy else -dim_a
+            self.target_entropy = -dim_a + int(self.use_kld_penalty)
             self.log_alpha = nn.Parameter(torch.zeros(1, requires_grad=True))
             self.alpha_optim = None
 
@@ -123,7 +127,7 @@ class SAC(nn.Module):
             alpha_loss.backward()
             self.alpha_optim.step()
 
-            self.alpha = torch.clamp(self.log_alpha.exp().detach(), max=1e6)  # TODO: check if it's right thing to do (detach)
+            self.alpha = self.log_alpha.exp().clamp(min=self.alpha_min, max=self.alpha_max)
             curr_alpha = self.alpha.clone()
         else:
             alpha_loss = torch.tensor(0.).to(policy_loss.device)
@@ -140,6 +144,7 @@ class SAC(nn.Module):
             'policy': policy_loss.item(),
             'alpha': alpha_loss.item(),
             'val_alpha': curr_alpha.item(),
+            'val_entropy': entropy.mean().item(),
         }
 
     # Save model parameters
@@ -186,15 +191,16 @@ class SAC(nn.Module):
             action = raw_action
         action = action * self.action_scale_bias[0] + self.action_scale_bias[1]
 
-        if self.use_kld_as_entropy:  # use KL divergence to the prior in place of entropy
+        entropy = dist_action.log_prob(raw_action)
+        if self.action_tanh:
+            entropy -= torch.log(1 - action.pow(2) + 1e-6)
+        entropy = entropy.sum(-1)
+
+        if self.use_kld_penalty:  # use KL divergence to the prior in place of entropy
             assert prior_model is not None
             with torch.no_grad():
                 prior_mean, prior_logstd = prior_model(state)
-            entropy = gaussian_kld_loss(action_mean, action_logstd, prior_mean, prior_logstd, reduction='none')
-        else:
-            entropy = dist_action.log_prob(raw_action)
-            if self.action_tanh:
-                entropy -= torch.log(1 - action.pow(2) + 1e-6)
-            entropy = entropy.sum(-1)
-        entropy.clamp_(-self.max_entropy_range, self.max_entropy_range)
+            kld_penalty = gaussian_kld_loss(action_mean, action_logstd, prior_mean, prior_logstd, reduction='none')
+            entropy += kld_penalty
+
         return action, entropy.unsqueeze(-1)  # match shape with Q output

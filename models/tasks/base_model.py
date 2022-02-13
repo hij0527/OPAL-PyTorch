@@ -29,12 +29,12 @@ class BaseModel:
             latent = mean_z
             if return_logprob:
                 print('Warning: logprob returned as 0 due to determinism')
-                logprob = torch.tensor(0.)
+                logprob = torch.tensor(0., device=self.device)
         else:
             dist = Normal(mean_z, logstd_z.exp())
             latent = dist.rsample()
             if return_logprob:
-                logprob = dist.log_prob(latent)
+                logprob = dist.log_prob(latent).sum(-1)
 
         ret_vals = [latent]
 

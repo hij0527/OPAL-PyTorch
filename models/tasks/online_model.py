@@ -18,7 +18,7 @@ class OnlineModel(BaseModel):
         if policy_type == 'sac':
             from models.policies.sac import SAC
             self.policy = SAC(dim_s=dim_s, dim_a=dim_z, hidden_size=hidden_size,
-                              num_layers=num_layers, use_kld_as_entropy=True).to(device)
+                              num_layers=num_layers, use_kld_penalty=True).to(device)
         else:
             raise ValueError('Unsupported policy type: {}'.format(policy_type))
 

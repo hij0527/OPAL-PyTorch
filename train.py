@@ -15,7 +15,7 @@ def main(args):
 
     device = python_utils.get_device(args.gpu_id)
     python_utils.seed_all(args.seed)
-    env = env_utils.get_env(args.domain_name, args.task_name, seed=args.seed)
+    env = env_utils.get_env(args.domain_name, args.task_name, seed=args.seed, task_agnostic=True)
 
     dim_s = np.prod(env.observation_space.shape)
     dim_a = np.prod(env.action_space.shape)
@@ -40,7 +40,7 @@ def main(args):
     # set up initial offline dataset
     buffer = SubtrajBuffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len,
                            sliding_window=args.sliding_window, normalize=args.normalize, verbose=args.verbose)
-    buffer.load_data(sparse_reward=args.sparse_reward, data_dir=args.data_dir, policy_path=args.dataset_policy)
+    buffer.load_data(data_dir=args.data_dir, policy_path=args.dataset_policy)
 
     # training phase 1: offline unsupervised primitive learning
     print('#### Training Phase 1 Start ####')

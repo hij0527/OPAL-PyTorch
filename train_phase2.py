@@ -27,8 +27,9 @@ def main(args):
         print('Dimensions: obs = {}, act = {}, latent = {}'.format(dim_s, dim_a, dim_z))
 
     # load trained OPAL
+    opal_dim_s = np.prod(env.base_observation_shape) if args.task_type == 'multitask' else dim_s
     opal = OPAL(
-        dim_s=dim_s,
+        dim_s=opal_dim_s,
         dim_a=dim_a,
         dim_z=dim_z,
         device=device,
@@ -38,7 +39,7 @@ def main(args):
         state_agnostic=args.opal_state_agnostic,
         unit_prior_std=args.opal_unit_prior_std,
     )
-    opal.load_state_dict(torch.load(args.ckpt_path))
+    opal.load_state_dict(torch.load(args.opal_ckpt))
 
     # set up initial offline dataset
     buffer = SubtrajBuffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len,
@@ -88,8 +89,13 @@ def main(args):
         from trainers.batch_trainer import BatchTrainer
 
         # get expert demonstrations
-        expert_demos = get_expert_demos(args, normalize_fn=buffer.normalize_observation)
-        label_dataset(expert_demos, opal, args, device)
+        demos = SubtrajBuffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len,
+                            sliding_window=args.sliding_window, normalize=False, verbose=args.verbose)
+        demos.load_expert_demos(sparse_reward=args.sparse_reward, data_dir=args.data_dir,
+                                policy_path=args.imitation_expert_policy, num_demos=args.imitation_num_demos)
+        demos.dataset['observations'] = buffer.normalize_observation(demos.dataset['observations'])
+        demos.dataset['next_observations'] = buffer.normalize_observation(demos.dataset['next_observations'])
+        label_dataset(demos, opal, args, device)
 
         # finetune primitive policy
         print('Finetuning primitive policy ...')
@@ -98,7 +104,7 @@ def main(args):
                                  print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
         data_keys = ['observations', 'actions', 'latents']
         # TODO: merge expert_demos with buffer?
-        finetuner.train(model=opal, buffer=expert_demos, data_keys=data_keys, device=device,
+        finetuner.train(model=opal, buffer=demos, data_keys=data_keys, device=device,
                         num_epochs=args.imitation_finetune_epochs, batch_size=args.batch_size, num_workers=args.num_workers,
                         finetune=True)
 
@@ -111,7 +117,7 @@ def main(args):
                                print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
         data_keys = ['observations', 'latents']
         batch_preproc = {'observations': (lambda x: x[:, 0, :])}  # use first states only
-        trainer.train(model=task_model, buffer=expert_demos, data_keys=data_keys, device=device,
+        trainer.train(model=task_model, buffer=demos, data_keys=data_keys, device=device,
                       num_epochs=args.imitation_task_epochs, batch_size=args.batch_size, num_workers=args.num_workers,
                       batch_preproc=batch_preproc)
 
@@ -126,24 +132,26 @@ def main(args):
         task_model.init_optimizer(args.lr)
         trainer = OnlineTrainer(logger=logger, phase=2, tag='online',
                                 print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
-        trainer.train(model=task_model, env=env, device=device, longstep_len=args.subtraj_len, train_episodes=args.online_train_episodes,
-                      train_start_step=args.online_train_start_step, updates_per_step=args.online_updates_per_step,
+        trainer.train(model=task_model, env=env, device=device, longstep_len=args.subtraj_len, train_steps=args.online_train_steps,
+                      init_random_steps=args.online_init_random_steps, updates_per_step=args.online_updates_per_step,
                       batch_size=args.online_batch_size, eval_freq=args.online_eval_freq, eval_episodes=args.online_eval_episodes)
 
     elif args.task_type == 'multitask':
         from models.tasks.multitask_model import MultitaskModel
-        from trainers.multitask_trainer import MultitaskTrainer
+        from trainers.online_trainer import OnlineTrainer
 
         # train task policy via online multi-task learning
         print('Training task policy ...')
         task_model = MultitaskModel(opal, dim_s, dim_z, device, policy_type=args.policy_type,
-                                    hidden_size=args.hidden_size, num_layers=args.num_layers)
+                                    hidden_size=args.hidden_size, num_layers=args.num_layers,
+                                    update_epochs=args.multitask_updates_per_step)
         task_model.init_optimizer(args.lr)
-        trainer = MultitaskTrainer(logger=logger, phase=2, tag='multitask',
-                                   print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
-        trainer.train(model=task_model, env=env, device=device, longstep_len=args.subtraj_len, train_episodes=args.multitask_train_episodes,
-                      update_freq=args.multitask_update_freq, updates_per_step=args.multitask_updates_per_step,
-                      batch_size=args.batch_size, eval_freq=args.multitask_eval_freq, eval_episodes=args.multitask_eval_episodes)
+        trainer = OnlineTrainer(logger=logger, phase=2, tag='multitask', on_policy=True,  # TODO
+                                print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
+        trainer.train(model=task_model, env=env, device=device, longstep_len=args.subtraj_len, train_steps=args.multitask_train_steps,
+                      init_random_steps=0, update_interval=args.multitask_update_interval, updates_per_step=1,  # updates_per_step is fed as arg to task_model
+                      batch_size=args.batch_size, eval_freq=args.multitask_eval_freq, eval_episodes=args.multitask_eval_episodes,
+                      multitask=True)
 
     else:
         raise ValueError('Unknown task type: {}'.format(args.task_type))
@@ -173,17 +181,6 @@ def label_dataset(buffer: SubtrajBuffer, opal: OPAL, args, device):
             np.save(args.save_latent_buffer, latent_buffer)
 
     buffer.add_latents(latent_buffer)
-
-
-def get_expert_demos(args, normalize_fn):
-    # TODO: 10 successful trajectories
-    demos = SubtrajBuffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len,
-                          sliding_window=args.sliding_window, normalize=False, verbose=args.verbose)
-    # demos.load_expert_demos(sparse_reward=args.sparse_reward, data_dir=args.data_dir)
-    demos.load_data(sparse_reward=args.sparse_reward, data_dir=args.data_dir, policy_path=args.dataset_policy)  # TEMPORARY
-    demos.dataset['observations'] = normalize_fn(demos.dataset['observations'])
-    demos.dataset['next_observations'] = normalize_fn(demos.dataset['next_observations'])
-    return demos
 
 
 if __name__ == "__main__":

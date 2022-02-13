@@ -12,7 +12,6 @@ from models.policies.sac import SAC, soft_update
 
 
 # TODO: match paper
-# TODO: alpha never dropped below 0.001
 
 
 class CQL(SAC):
@@ -25,10 +24,14 @@ class CQL(SAC):
         gamma=0.99,
         tau=5e-3,
         alpha=0.2,
+        alpha_min=0.001,
+        alpha_max=1e6,
         target_update_interval=1,
         automatic_entropy_tuning=True,
         max_entropy_range=100.,
-        use_kld_as_entropy=False,
+        use_kld_penalty=False,
+        action_tanh=False,
+        action_scale_bias=(1, 0),
 
         # CQL
         min_q_version=3,
@@ -41,19 +44,24 @@ class CQL(SAC):
         lagrange_thresh=0.0,
     ):
         super().__init__(
-            dim_s,
-            dim_a,
-            hidden_size,
-            num_layers,
-            gamma,
-            tau,
-            alpha,
-            target_update_interval,
-            automatic_entropy_tuning,
-            max_entropy_range,
-            use_kld_as_entropy,
+            dim_s=dim_s,
+            dim_a=dim_a,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            gamma=gamma,
+            tau=tau,
+            alpha=alpha,
+            alpha_min=alpha_min,
+            alpha_max=alpha_max,
+            target_update_interval=target_update_interval,
+            automatic_entropy_tuning=automatic_entropy_tuning,
+            max_entropy_range=max_entropy_range,
+            use_kld_penalty=False,
+            action_tanh=action_tanh,
+            action_scale_bias=action_scale_bias,
         )
 
+        self.alpha_prime = alpha
         self.with_lagrange = with_lagrange
         self.deterministic_backup = deterministic_backup
         self.max_q_backup = max_q_backup
@@ -62,8 +70,6 @@ class CQL(SAC):
         self.min_q_weight = min_q_weight
         self.num_random = num_random
         self.init_bc_steps = 100  # TODO
-
-        self.alpha_prime = torch.as_tensor(alpha, dtype=torch.float32)   # TODO
 
         # TODO
         if self.with_lagrange:
@@ -168,7 +174,7 @@ class CQL(SAC):
             alpha_loss.backward()
             self.alpha_optim.step()
 
-            self.alpha = torch.clamp(self.log_alpha.exp(), max=1e6)
+            self.alpha = torch.clamp(self.log_alpha.exp(), min=self.alpha_min, max=self.alpha_max)
             curr_alpha = self.alpha.clone()
         else:
             alpha_loss = torch.tensor(0.)
@@ -181,7 +187,7 @@ class CQL(SAC):
             alpha_prime_loss.backward()
             self.alpha_prime_optim.step()
 
-            self.alpha_prime = torch.clamp(self.log_alpha_prime.exp(), max=1e6)
+            self.alpha_prime = self.log_alpha_prime.exp().clamp(min=self.alpha_min, max=self.alpha_max)
             curr_alpha_prime = self.alpha_prime.clone()
         else:
             alpha_prime_loss = torch.tensor(0.)
@@ -226,12 +232,20 @@ class CQL(SAC):
 
     def _sample_multiple_actions(self, state, num_actions=10):
         """Returns num_actions batches of actions. shape: (num_actions, batch_size, dim_aciton)"""
-        # TODO: tanh, action scaling
         action_mean, action_logstd = self.policy(state)
         dist_action = Normal(action_mean, action_logstd.exp())
-        actions = dist_action.rsample(sample_shape=(num_actions,))
-        entropy = dist_action.log_prob(actions).sum(-1)
-        entropy.clamp_(-self.max_entropy_range, self.max_entropy_range)
+        raw_actions = dist_action.rsample(sample_shape=(num_actions,))
+        if self.action_tanh:
+            actions = torch.tanh(raw_actions)
+        else:
+            actions = raw_actions
+        actions = actions * self.action_scale_bias[0] + self.action_scale_bias[1]
+
+        entropy = dist_action.log_prob(raw_actions)
+        if self.action_tanh:
+            entropy -= torch.log(1 - actions.pow(2) + 1e-6)
+        entropy = entropy.sum(-1)
+
         return actions, entropy.unsqueeze(-1)  # match shape with Q output
 
     def _get_entropy(self, state, action):

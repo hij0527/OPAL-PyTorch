@@ -132,7 +132,7 @@ class PrimitivePolicyStateAgnostic(ProbabilisticModule):  # pi_theta(a1...ac|z)
     def forward(self, latents):
         # input shape: (batch_size, subtraj_len, dim_z)
         # output shape: tuple of (batch_size, subtraj_len, dim_a)
-        x = self.gru(latents)
+        x, _ = self.gru(latents)
         return super().forward(x)
 
 

@@ -36,7 +36,10 @@ class BC(nn.Module):
         self.optimizer.step()
 
         self.update_step += 1
-        return loss.item(), {'bc': loss.item()}
+        return loss.item(), {
+            'bc': loss.item(),
+            'val_precision': (1 / logstd_a.exp().pow(2)).mean(),
+        }
 
     # Save model parameters
     def state_dict(self):
@@ -49,4 +52,5 @@ class BC(nn.Module):
     # Load model parameters
     def load_state_dict(self, state_dict):
         self.policy.load_state_dict(state_dict['policy'])
-        self.optimizer.load_state_dict(state_dict['optimizer'])
+        if self.optimizer is not None:
+            self.optimizer.load_state_dict(state_dict['optimizer'])
