@@ -19,10 +19,10 @@ def parse_args():
 
     ap.add_argument('--domain_name', type=str, choices=env_utils.DOMAIN_NAMES, default=env_utils.DOMAIN_NAMES[0], help='environment domain name')
     ap.add_argument('--task_name', type=str, choices=env_utils.TASK_NAMES, default=env_utils.TASK_NAMES[0], help='environment task name')
-    ap.add_argument('--dataset_size', type=int, default=int(1e6), help='size of offline dataset for phase 1')
+    ap.add_argument('--dataset_size', type=int, default=int(1e6), help='size of offline dataset')
     ap.add_argument('--normalize', action='store_true', help='set to normalize states')
     ap.add_argument('--subtraj_len', '-C', metavar='c', type=int, default=10, help='length of subtrajectory (c)')
-    ap.add_argument('--subtraj_num', '-N', metavar='N', type=int, default=-1, help='number of subtrajectories for phase 1 (N)')
+    ap.add_argument('--subtraj_num', '-N', metavar='N', type=int, default=-1, help='number of subtrajectories (N)')
     ap.add_argument('--sliding_window', action='store_true', help='if set, use sliding window for splitting subtrajectories')
     ap.add_argument('--latent_dim', '-Z', metavar='dim_Z', type=int, default=8, help='dimension of primitive latent vector (dim(Z))')
 
@@ -33,11 +33,11 @@ def parse_args():
     ap.add_argument('--state_agnostic', action='store_true', help='if set, use state agnostic models')
     ap.add_argument('--unit_prior_std', action='store_true', help='if set, use fixed std=1 for prior')
 
-    # phase 1: primitive training
-    ap.add_argument('--epochs', type=int, default=100, help='number of epochs for phase 1')
-    ap.add_argument('--batch_size', type=int, default=50, help='batch size for phase 1')
+    # primitive training
+    ap.add_argument('--epochs', type=int, default=100, help='number of epochs')
+    ap.add_argument('--batch_size', type=int, default=50, help='batch size')
     ap.add_argument('--num_workers', type=int, default=6, help='number of DataLoader workers')
-    ap.add_argument('--lr', type=float, default=1e-3, help='learning rate for phase 1')
+    ap.add_argument('--lr', type=float, default=1e-3, help='learning rate')
     ap.add_argument('--truncate_normal', type=float, default=None, help='max sigma for sampling from normal')
     ap.add_argument('--eps_kld', type=float, default=0., help='upper bound for KL divergence contraint')
     ap.add_argument('--beta', type=float, default=0.1, help='weight of KL divergence in loss')

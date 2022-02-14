@@ -7,7 +7,6 @@ class BatchTrainer(BaseTrainer):
     def __init__(
         self,
         logger,
-        phase,
         tag='',
         print_freq=100,
         log_freq=100,
@@ -15,7 +14,6 @@ class BatchTrainer(BaseTrainer):
     ):
         super().__init__(
             logger,
-            phase,
             tag,
             print_freq,
             log_freq,

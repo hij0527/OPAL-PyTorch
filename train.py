@@ -42,9 +42,9 @@ def main(args):
                            sliding_window=args.sliding_window, normalize=args.normalize, verbose=args.verbose)
     buffer.load_data(data_dir=args.data_dir, policy_path=args.dataset_policy)
 
-    # training phase 1: offline unsupervised primitive learning
-    print('#### Training Phase 1 Start ####')
-    trainer = BatchTrainer(logger=logger, phase=1, tag='',
+    # offline unsupervised primitive learning
+    print('#### OPAL Training Start ####')
+    trainer = BatchTrainer(logger=logger, tag='opal',
                            print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
     data_keys = ['observations', 'actions']
     beta_schedule = (args.beta, args.beta_final if args.beta_final else args.beta)
@@ -54,7 +54,7 @@ def main(args):
                   param_schedule={'beta': beta_schedule, 'beta2': beta2_schedule},
                   truncate_normal=args.truncate_normal, eps_kld=args.eps_kld, beta=args.beta, beta2=args.beta2,
                   grad_clip_steps=args.grad_clip_steps, grad_clip_val=args.grad_clip_val)
-    print('#### Training Phase 1 End ####')
+    print('#### OPAL Training End ####')
 
 
 if __name__ == "__main__":

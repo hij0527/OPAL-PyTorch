@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 
 from memory.buffer import SubtrajBuffer
 from models.opal import OPAL
-from params_phase2 import parse_args
+from params_task import parse_args
 import utils.env_utils as env_utils
 from utils.logger import Logger
 import utils.python_utils as python_utils
@@ -49,8 +49,8 @@ def main(args):
     env = env_utils.PreprocObservation(env, buffer.normalize_observation)
     env = env_utils.SilentEnv(env)
 
-    # training phase 2: task policy training + (optional) primitive policy finetuning 
-    print('#### Training Phase 2 Start ####')
+    # task policy training + (optional) primitive policy finetuning
+    print('#### Task Policy Training Start ####')
 
     if args.task_type == 'offline':
         from memory.buffer import FixedBuffer
@@ -63,7 +63,7 @@ def main(args):
         # finetune primitive policy on Dr
         print('Finetuning primitive policy ...')
         opal.init_optimizer(args.lr)
-        finetuner = BatchTrainer(logger=logger, phase=2, tag='finetune',
+        finetuner = BatchTrainer(logger=logger, tag='opal_finetune',
                                  print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
         data_keys = ['observations', 'actions', 'latents']
         finetuner.train(model=opal, buffer=buffer, data_keys=data_keys, device=device,
@@ -78,7 +78,7 @@ def main(args):
 
         scale_reward = lambda x: np.float32((x - 0.5) * 4.0)  # TODO
         offline_buffer = FixedBuffer(buffer.get_labeled_dataset(), preproc={'rewards': scale_reward})
-        trainer = BatchTrainer(logger=logger, phase=2, tag='offline',
+        trainer = BatchTrainer(logger=logger, tag='offline',
                                print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
         data_keys = ['observations', 'actions', 'rewards', 'next_observations', 'terminals']
         trainer.train(model=task_model, buffer=offline_buffer, data_keys=data_keys, device=device,
@@ -100,7 +100,7 @@ def main(args):
         # finetune primitive policy
         print('Finetuning primitive policy ...')
         opal.init_optimizer(args.lr)
-        finetuner = BatchTrainer(logger=logger, phase=2, tag='finetune',
+        finetuner = BatchTrainer(logger=logger, tag='opal_finetune',
                                  print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
         data_keys = ['observations', 'actions', 'latents']
         # TODO: merge expert_demos with buffer?
@@ -113,7 +113,7 @@ def main(args):
         task_model = ImitationModel(opal, dim_s, dim_z, device, policy_type=args.policy_type,
                                     hidden_size=args.hidden_size, num_layers=args.num_layers)
         task_model.init_optimizer(args.lr)
-        trainer = BatchTrainer(logger=logger, phase=2, tag='imitation',
+        trainer = BatchTrainer(logger=logger, tag='imitation',
                                print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
         data_keys = ['observations', 'latents']
         batch_preproc = {'observations': (lambda x: x[:, 0, :])}  # use first states only
@@ -130,7 +130,7 @@ def main(args):
         task_model = OnlineModel(opal, dim_s, dim_z, device, policy_type=args.policy_type,
                                  hidden_size=args.hidden_size, num_layers=args.num_layers)
         task_model.init_optimizer(args.lr)
-        trainer = OnlineTrainer(logger=logger, phase=2, tag='online',
+        trainer = OnlineTrainer(logger=logger, tag='online',
                                 print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
         trainer.train(model=task_model, env=env, device=device, longstep_len=args.subtraj_len, train_steps=args.online_train_steps,
                       init_random_steps=args.online_init_random_steps, updates_per_step=args.online_updates_per_step,
@@ -146,7 +146,7 @@ def main(args):
                                     hidden_size=args.hidden_size, num_layers=args.num_layers,
                                     update_epochs=args.multitask_updates_per_step)
         task_model.init_optimizer(args.lr)
-        trainer = OnlineTrainer(logger=logger, phase=2, tag='multitask', on_policy=True,  # TODO
+        trainer = OnlineTrainer(logger=logger, tag='multitask', on_policy=True,  # TODO
                                 print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
         trainer.train(model=task_model, env=env, device=device, longstep_len=args.subtraj_len, train_steps=args.multitask_train_steps,
                       init_random_steps=0, update_interval=args.multitask_update_interval, updates_per_step=1,  # updates_per_step is fed as arg to task_model
@@ -156,7 +156,7 @@ def main(args):
     else:
         raise ValueError('Unknown task type: {}'.format(args.task_type))
 
-    print('#### Training Phase 2 End ####')
+    print('#### Task Policy Training End ####')
 
 
 def label_dataset(buffer: SubtrajBuffer, opal: OPAL, args, device):

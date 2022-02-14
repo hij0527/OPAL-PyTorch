@@ -8,7 +8,6 @@ class OnlineTrainer(BaseTrainer):
     def __init__(
         self,
         logger,
-        phase,
         tag='',
         on_policy=False,
         print_freq=100,
@@ -17,7 +16,6 @@ class OnlineTrainer(BaseTrainer):
     ):
         super().__init__(
             logger,
-            phase,
             tag,
             print_freq,
             log_freq,
@@ -50,8 +48,8 @@ class OnlineTrainer(BaseTrainer):
         init_random_longsteps = (init_random_steps + longstep_len - 1) // longstep_len
         total_step, total_longstep = 0, 0
 
-        self.logger.log('phase2_online_reward/train', 0., 0)
-        self.logger.log('phase2_online_reward/test', 0., 0)
+        self.logger.log('{}_reward/train'.format(self.tag), 0., 0)
+        self.logger.log('{}_reward/test'.format(self.tag), 0., 0)
 
         episode = 0
         while total_step < train_steps:
@@ -132,9 +130,9 @@ class OnlineTrainer(BaseTrainer):
                 if hasattr(model, 'adjust_params'):
                     model.adjust_params(total_step)  # TODO: longstep?
 
-            self.logger.log('phase2_online_reward/train', episode_reward, episode)
-            print("[phase2_online, episode {}] total steps: {}, episode steps: {}, reward: {:.2f}, mem: {:d}".format(
-                episode, total_step, episode_step, episode_reward, len(replay_buffer)))
+            self.logger.log('{}_reward/train'.format(self.tag), episode_reward, episode)
+            print("[{}, episode {}] total steps: {}, episode steps: {}, reward: {:.2f}, mem: {:d}".format(
+                self.tag, episode, total_step, episode_step, episode_reward, len(replay_buffer)))
 
             # evaluate
             if eval_freq > 0 and episode % eval_freq == 0:
@@ -142,9 +140,9 @@ class OnlineTrainer(BaseTrainer):
                     test_rewards = self.rollout_multistep(model, env, eval_episodes, longstep_len)
                 else:
                     test_rewards = self.rollout(model, env, eval_episodes)
-                self.logger.log('phase2_online_reward/test', test_rewards.mean(), episode)
-                print("[phase2_online, test] avg reward: {:.2f} (min: {:.2f}, max: {:.2f})".format(
-                    test_rewards.mean(), test_rewards.min(), test_rewards.max()))
+                self.logger.log('{}_reward/test'.format(self.tag), test_rewards.mean(), episode)
+                print("[{}, test] avg reward: {:.2f} (min: {:.2f}, max: {:.2f})".format(
+                    self.tag, test_rewards.mean(), test_rewards.min(), test_rewards.max()))
 
             self.save_model(model, episode)
 

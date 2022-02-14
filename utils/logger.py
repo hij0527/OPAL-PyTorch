@@ -29,8 +29,8 @@ class Logger:
     def log(self, tag, value, step):
         self.writer.add_scalar(tag, value, step)
 
-    def get_ckpt_name(self, phase, step, tag=''):
-        return os.path.join(self.ckpt_dir, 'phase{:d}{}_{:d}.ckpt'.format(phase, tag, step))
+    def get_ckpt_name(self, step, tag='ckpt'):
+        return os.path.join(self.ckpt_dir, '{}_{:d}.ckpt'.format(tag, step))
 
     def save_args(self, args):
         with open(os.path.join(self.args_dir, 'args.json'), 'w') as f:

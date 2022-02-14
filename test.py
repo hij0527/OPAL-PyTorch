@@ -17,8 +17,8 @@ def parse_args():
     ap.add_argument('--gpu_id', type=str, default=None, help='GPU IDs to use. ex: 1,2 (default: None)')
     ap.add_argument('--verbose', action='store_true', help='set verbose mode')
 
-    ap.add_argument('--opal_ckpt', type=str, required=True, help='path to phase-1 model (checkpoint)')
-    ap.add_argument('--task_ckpt', type=str, required=True, help='path to phase-2 model (checkpoint)')
+    ap.add_argument('--opal_ckpt', type=str, required=True, help='path to OPAL checkpoint')
+    ap.add_argument('--task_ckpt', type=str, required=True, help='path to task policy checkpoint')
     ap.add_argument('--test_episodes', type=int, default=10, help='number of episodes to test')
 
     ap.add_argument('--domain_name', type=str, choices=env_utils.DOMAIN_NAMES, default=env_utils.DOMAIN_NAMES[0], help='environment domain name')
@@ -41,7 +41,7 @@ def parse_args():
     # downstream task
     ap.add_argument('--task_type', type=str, choices=['offline', 'imitation', 'online', 'multitask'], default='offline', help='downstream task type')
     ap.add_argument('--policy_type', type=str, choices=['cql', 'bc', 'sac', 'ppo'], default='cql', help='RL algorithm to use for downstream learning')
-    ap.add_argument('--batch_size', type=int, default=50, help='batch size for phase 2')
+    ap.add_argument('--batch_size', type=int, default=50, help='batch size')
     ap.add_argument('--num_workers', type=int, default=6, help='number of DataLoader workers')
 
     args = ap.parse_args()
