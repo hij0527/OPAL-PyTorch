@@ -39,10 +39,10 @@ class RLAgent:
     def rollout_step(self, env, episode_step, observation, rand=False, deterministic=False):
         if rand:
             action = env.action_space.sample()
-            logprob = torch.zeros_like(action, device=self.device).sum(-1)
+            logprob = np.zeros_like(action).sum(-1)
         else:
             action, logprob = self.get_action(observation, deterministic=deterministic)
-            action = action.cpu().numpy()
+            action, logprob = action.cpu().numpy(), logprob.cpu().numpy()
         action = np.clip(action, env.action_space.low, env.action_space.high)
         next_observation, reward, done, _ = env.step(action)
         episode_step += 1
@@ -64,7 +64,9 @@ class RLAgent:
         elif policy_type == 'ppo':
             from models.policies.ppo import PPO
             policy_cls = PPO
-            policy_kwargs.update({'policy_activation': 'relu'})
+            policy_kwargs.update({
+                'activation': 'relu',
+            })
         elif policy_type == 'bc':
             from models.policies.bc import BC
             policy_cls = BC

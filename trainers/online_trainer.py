@@ -48,12 +48,14 @@ class OnlineRLTrainer(BaseRLTrainer):
                 next_step, next_observation, reward, done, success, action, logprob = self.model.rollout_step(
                     self.env, episode_step, observation, rand=self.env_step < init_random_steps)
                 self.env_step += next_step - episode_step
-                episode_step = next_step
-                episode_reward += reward
 
                 self.replay_buffer.add((observation, action, reward, next_observation, success, logprob))
                 self.update_model(update_interval, updates_per_step, batch_size)
                 self.adjust_model_params()
+
+                observation = next_observation
+                episode_reward += reward
+                episode_step = next_step
 
             self.logger.log(tag_train_reward, episode_reward, episode_idx)
             print("[{}, episode {}] total steps: {}, episode steps: {}, reward: {:.2f}, mem: {:d}".format(
