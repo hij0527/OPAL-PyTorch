@@ -26,29 +26,29 @@ class PPO(nn.Module):
         hidden_size=64,
         num_layers=1,
         gamma=0.99,
-        update_epochs=80,
         eps_clip=0.2,
-        action_std_init=0.6,
+        action_std_init=2.,
         action_std_decay_freq=int(2.5e5),
         action_std_decay_rate=0.05,
         min_action_std=0.1,
-        weight_ent=0.01,
+        weight_ent=0.002,
+        policy_activation='tanh',
     ):
         super().__init__()
         self.verbose = verbose
 
         self.gamma = gamma
-        self.update_epochs = update_epochs
         self.eps_clip = eps_clip
         self.action_std_decay_freq = action_std_decay_freq
         self.action_std_decay_rate = action_std_decay_rate
         self.min_action_std = min_action_std
         self.weight_ent = weight_ent
+        self.is_optimizer_initialized = False
 
-        self.actor = TaskPolicy(dim_s, dim_a, hidden_size, num_layers, activation='tanh')
+        self.actor = TaskPolicy(dim_s, dim_a, hidden_size, num_layers, activation=policy_activation)
         self.critic = ValueNetwork(dim_s, hidden_size, num_layers, activation='tanh')
 
-        self.actor_old = TaskPolicy(dim_s, dim_a, hidden_size, num_layers, activation='tanh')
+        self.actor_old = TaskPolicy(dim_s, dim_a, hidden_size, num_layers, activation=policy_activation)
         self.critic_old = ValueNetwork(dim_s, hidden_size, num_layers, activation='tanh')
         hard_update(self.actor_old, self.actor)
         hard_update(self.critic_old, self.critic)
@@ -71,6 +71,7 @@ class PPO(nn.Module):
             {'params': self.actor.parameters(), 'lr': lr_actor},
             {'params': self.critic.parameters(), 'lr': lr_critic},
         ])
+        self.is_optimizer_initialized = True
 
     def adjust_params(self, timestep):
         # Decay action std of ouput action distribution
@@ -79,13 +80,13 @@ class PPO(nn.Module):
             if self.verbose:
                 print('decay action_std to: {:.6f}'.format(self.action_std))
 
-    def update(self, samples):
-        state_batch, action_batch, reward_batch, _, done_batch, logprob_batch = samples
+    def update(self, samples, updates_per_step=80, **kwargs):
+        state_batch, action_batch, logprob_batch = samples['observations'], samples['actions'], samples['logprobs']
 
         # Monte Carlo estimate of returns
         rewards = []
         discounted_reward = 0
-        for reward, is_done in zip(reversed(reward_batch), reversed(done_batch)):
+        for reward, is_done in zip(reversed(samples['rewards']), reversed(samples['successes'])):
             if is_done:
                 discounted_reward = 0
             discounted_reward = reward + (self.gamma * discounted_reward)
@@ -100,7 +101,7 @@ class PPO(nn.Module):
         losses = []
         sublosses = []
 
-        for _ in range(self.update_epochs):
+        for _ in range(updates_per_step):
             # Evaluating old actions and values
             action_mean, _ = self.actor(state_batch)
             action_dist = Normal(action_mean, torch.ones_like(action_mean) * self.action_std)
@@ -148,15 +149,20 @@ class PPO(nn.Module):
         }
 
     def state_dict(self):
-        return {
+        state_dict = {
             'actor': self.actor_old.state_dict(),
             'critic': self.critic_old.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
         }
+        if self.is_optimizer_initialized:
+            state_dict.update({
+                'optimizer': self.optimizer.state_dict(),
+            })
+        return state_dict
 
     def load_state_dict(self, state_dict):
         self.actor.load_state_dict(state_dict['actor'])
         self.actor_old.load_state_dict(state_dict['actor'])
         self.critic.load_state_dict(state_dict['critic'])
         self.critic_old.load_state_dict(state_dict['critic'])
-        self.optimizer.load_state_dict(state_dict['optimizer'])
+        if self.is_optimizer_initialized:
+            self.optimizer.load_state_dict(state_dict['optimizer'])

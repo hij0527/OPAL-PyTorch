@@ -10,32 +10,28 @@
 # - 'next_observations' and 'rewards_sparse' are added to the dataset
 # - terminals are obtained manually, since the environment never returns True for terminal
 
-import gym
-import d4rl
-from d4rl.offline_env import get_keys
+#from d4rl.offline_env import get_keys
 import h5py
 import numpy as np
 import os
-from PIL import Image
 import torch
 from tqdm import tqdm
-
-from utils.env_utils import get_antmaze_env
-from utils.python_utils import SuppressStdout
 
 
 def parse_args():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--noisy', action='store_true', help='Noisy actions')
-    parser.add_argument('--maze', type=str, default='umaze', help='Maze type. umaze, medium, or large')
+    parser.add_argument('--task', type=str, default='medium', help='Maze type. umaze, medium, or large')
     parser.add_argument('--num_samples', type=int, default=int(1e6), help='Num samples to collect')
-    parser.add_argument('--policy_file', type=str, default=None, help='Path to policy')
+    parser.add_argument('--policy', type=str, default=None, help='Path to policy')
     parser.add_argument('--video', action='store_true')
-    parser.add_argument('--max_episode_steps', default=1000, type=int)
-    parser.add_argument('--multi_start', action='store_true')
-    parser.add_argument('--multigoal', action='store_true')
+    parser.add_argument('--max_episode_steps', type=int, default=1000)
+    parser.add_argument('--no_multi_start', action='store_false', dest='multi_start')
+    parser.add_argument('--no_multigoal', action='store_false', dest='multigoal')
+    parser.add_argument('--no_noisy', action='store_false', dest='noisy')
     parser.add_argument('--data_dir', type=str, default='./data', help='Directory to save dataset')
+    parser.add_argument('--expert_demos', type=int, default=0, help='Number of expert demos to collect')
+    parser.add_argument('--seed', type=int, default=0)
     args = parser.parse_args()
     args.data_dir = os.path.expanduser(args.data_dir)
     return args
@@ -75,25 +71,30 @@ def merge_data(data1, data2):
 
 def npify(data):
     for k in data:
-        if k in ['terminals', 'timeouts']:
-            dtype = np.bool_
+        if k == 'seed':
+            dtype = int
+        elif k in ['terminals', 'timeouts']:
+            dtype = bool
         else:
             dtype = np.float32
 
         data[k] = np.array(data[k], dtype=dtype)
 
 
-def load_policy(policy_file):
+def load_policy(policy_path):
     # temporarily set import path to avoid import error while loading
-    import sys
-    sys.path.append(os.path.dirname(d4rl.__file__))
-    data = torch.load(policy_file)
+    import importlib, sys
+    sys.path.append(os.path.dirname(importlib.util.find_spec('d4rl').origin))
+    data = torch.load(policy_path)
+    del sys.path[-1]
     policy = data['exploration/policy'].to('cpu')
+    policy.eval()
     env = data['evaluation/env']
     return policy, env
 
 
 def save_video(save_dir, file_name, frames, episode_id=0):
+    from PIL import Image
     filename = os.path.join(save_dir, file_name+ '_episode_{}'.format(episode_id))
     if not os.path.exists(filename):
         os.makedirs(filename)
@@ -122,23 +123,32 @@ def download_policy_file(policy_path):
 
 
 def collect_dataset(args, filepath, verbose):
+    from utils.env_utils import make_antmaze_train_env, make_env, SilentEnv
     if verbose:
         print('Start collecting dataset')
+        if args.expert_demos:
+            print('Colleting {} expert demo data'.format(args.expert_demos))
 
     args.multigoal = True  # not used, always set as True
 
-    with SuppressStdout():
-        env = get_antmaze_env(maze=args.maze, multi_start=args.multi_start)
+    if args.expert_demos:
+        env = make_env('antmaze', args.task, seed=args.seed)
+    else:
+        env = make_antmaze_train_env(maze=args.task, sparse_reward=False, multi_start=args.multi_start)
+        env = SilentEnv(env)
+        env.seed(args.seed)
+        env.observation_space.seed(args.seed)
+        env.action_space.seed(args.seed)
 
     # Load the policy
-    policy, _ = load_policy(args.policy_file)
+    policy, _ = load_policy(args.policy)
     if verbose:
-        print("Policy loaded from {}".format(args.policy_file))
+        print("Policy loaded from {}".format(args.policy))
 
     # Define goal reaching policy fn
     def _goal_reaching_policy_fn(obs, goal):
         goal_x, goal_y = goal
-        obs_new = obs[2:-2]
+        obs_new = obs[2:]
         goal_tuple = np.array([goal_x, goal_y])
 
         # normalize the norm of the relative goals to in-distribution values
@@ -154,17 +164,17 @@ def collect_dataset(args, filepath, verbose):
     episode_data = reset_data()
     returns, returns_sparse = [], []
 
-    with SuppressStdout():
-        obs, ret, done = env.reset(), 0., False
-        env.set_target()
+    obs, ret, done = env.reset(), 0., False
     ret_sparse = 0.
     ts, timeout = 0, False
 
     if args.video:
         frames = [env.physics.render(width=500, height=500, depth=False)]
 
+    episode_idx = 0
+
     for i in range(args.num_samples):
-        with SuppressStdout():
+        with torch.no_grad():
             act, _ = data_collection_policy(obs)
 
         if args.noisy:
@@ -174,12 +184,13 @@ def collect_dataset(args, filepath, verbose):
         next_obs, r, done, _ = env.step(act)
         ret += r
 
-        # Since eval=False for env, env will never emit done=True, and we have to set it manually.
-        # done is the same as sparse reward, following the GoalReachingEnv implementation (L40, L42, L46)
+        # sparse reward calculation follows the GoalReachingEnv implementation in D4RL
         # https://github.com/rail-berkeley/d4rl/blob/7ab5a05c8782099e748ab30ca921021644478a62/d4rl/locomotion/goal_reaching_env.py
-        r_sparse = 1.0 if r >= -0.5 else 0.0
+        if args.expert_demos:
+            r_sparse = r
+        else:
+            r_sparse = 1.0 if r >= -0.5 else 0.0
         ret_sparse += r_sparse
-        done = bool(r_sparse)
 
         ts += 1
 
@@ -187,37 +198,45 @@ def collect_dataset(args, filepath, verbose):
             timeout = True
             done = True
 
-        append_data(episode_data, obs[:-2], act, r, env.target_goal, done, timeout, env.physics.data, r_sparse)
+        append_data(episode_data, obs, act, r, env.target_goal, done, timeout, env.physics.data, r_sparse)
 
         if args.video:
             frames.append(env.physics.render(width=500, height=500, depth=False))
 
         if done:
-            episode_data['next_observations'] = episode_data['observations'][1:] + [next_obs[:-2]]
-            merge_data(full_data, episode_data)
-            returns.append(ret)
-            returns_sparse.append(ret_sparse)
+            episode_data['next_observations'] = episode_data['observations'][1:] + [next_obs]
+            if not args.expert_demos or ret_sparse > 0:  # for expert demos, collect only the successful episodes
+                merge_data(full_data, episode_data)
+                returns.append(ret)
+                returns_sparse.append(ret_sparse)
 
-            if args.video:
-                frames = np.array(frames)
-                save_video('./videos/', 'Ant_navigation', frames, len(returns))
+                episode_idx += 1
+                if verbose and episode_idx % 10 == 0:
+                    print('episode: {}, current size: {}, ret: {}, success: {}'.format(
+                        episode_idx, len(full_data['observations']), ret, ret_sparse))
+
+                if args.video:
+                    frames = np.array(frames)
+                    save_video('./videos/', 'Ant_navigation', frames, len(returns))
 
             episode_data = reset_data()
-            with SuppressStdout():
-                obs, ret, done = env.reset(), 0., False
-                env.set_target()
+            obs, ret, done = env.reset(), 0., False
+            ret_sparse = 0.
             ts, timeout = 0, False
 
             if args.video:
                 frames = [env.physics.render(width=500, height=500, depth=False)]
-
-            if verbose and len(full_data['observations']) % 10000 == 0:
-                print(' collecting... (current size: {})'.format(len(full_data['observations'])))
         else:
             obs = next_obs
 
-    assert(len(full_data['observations']) == len(full_data['actions']) == args.num_samples)
+        if args.expert_demos and episode_idx >= args.expert_demos:
+            break
 
+    if args.expert_demos:
+        assert episode_idx == args.expert_demos
+    else:
+        assert len(full_data['observations']) == len(full_data['actions']) == args.num_samples
+    full_data['seed'] = [args.seed]
     npify(full_data)
 
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -236,15 +255,20 @@ def collect_dataset(args, filepath, verbose):
     return full_data
 
 
-def get_dataset(args, verbose=False):
-    fn = 'Ant_maze_{}{}_multistart_{}_multigoal_{}.hdf5'.format(
-        args.maze, '_noisy' if args.noisy else '', args.multi_start, args.multigoal)
-    filepath = os.path.join(args.data_dir, fn)
-    if verbose:
-        print('Dataset file path: {}'.format(filepath))
+def get_keys(h5file):
+    keys = []
 
+    def visitor(name, item):
+        if isinstance(item, h5py.Dataset):
+            keys.append(name)
+
+    h5file.visititems(visitor)
+    return keys
+
+
+def load_hdf5(filepath):
+    dataset = {}
     try:
-        dataset = {}
         with h5py.File(filepath, 'r') as f:
             for k in tqdm(get_keys(f), desc="load datafile"):
                 try:  # first try loading as an array
@@ -253,16 +277,43 @@ def get_dataset(args, verbose=False):
                     dataset[k] = f[k][()]
         return dataset
     except (FileNotFoundError, OSError) as e:
-        print('Dataset file not found. Trying to generate a new one.')
+        return {}
 
-    if args.policy_file is None:
-        args.policy_file = os.path.join(args.data_dir, 'antmaze_policy.pkl')
-    if not os.path.exists(args.policy_file):
-        download_policy_file(args.policy_file)
+
+def get_dataset(args, verbose=False, create_on_fail=False):
+    args.expert_demos = args.expert_demos if hasattr(args, 'expert_demos') else 0
+    if args.expert_demos:
+        fn = 'Ant_maze_{}_expert_{}.hdf5'.format(args.task, args.expert_demos)
+    else:
+        fn = 'Ant_maze_{}{}_multistart_{}_multigoal_{}.hdf5'.format(
+            args.task, '_noisy' if args.noisy else '', args.multi_start, args.multigoal)
+
+    filepath = os.path.join(args.data_dir, fn)
+    if verbose:
+        print('Dataset file path: {}'.format(filepath))
+
+    dataset = load_hdf5(filepath)
+    if dataset:
+        return dataset
+
+    if not create_on_fail:
+        raise FileNotFoundError('dataset file {} does not exist'.format(filepath))
+
+    print('Dataset file not found. Trying to generate a new one.')
+
+    if args.policy is None:
+        args.policy = os.path.join(args.data_dir, 'antmaze_policy.pkl')
+    if not os.path.exists(args.policy):
+        download_policy_file(args.policy)
 
     return collect_dataset(args, filepath, verbose)
 
 
 if __name__ == '__main__':
+    from utils.python_utils import seed_all
     args = parse_args()
-    dataset = get_dataset(args, verbose=True)
+    print('seed is: {}'.format(args.seed))
+    seed_all(args.seed)
+    dataset = get_dataset(args, verbose=True, create_on_fail=True)
+    print('dataset loaded. seed={}, obs shape={}'.format(
+        dataset['seed'][0], dataset['observations'].shape))

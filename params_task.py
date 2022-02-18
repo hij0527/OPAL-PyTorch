@@ -21,12 +21,12 @@ def parse_args():
 
     ap.add_argument('--domain_name', type=str, choices=env_utils.DOMAIN_NAMES, default=env_utils.DOMAIN_NAMES[0], help='environment domain name')
     ap.add_argument('--task_name', type=str, choices=env_utils.TASK_NAMES, default=env_utils.TASK_NAMES[0], help='environment task name')
-    ap.add_argument('--sparse_reward', action='store_true', help='sparse reward mode')
+    ap.add_argument('--dense_reward', action='store_false', dest='sparse_reward', help='dense reward mode')
     ap.add_argument('--dataset_size', type=int, default=int(1e6), help='size of offline dataset')
     ap.add_argument('--normalize', action='store_true', help='set to normalize states')
     ap.add_argument('--subtraj_len', '-C', metavar='c', type=int, default=10, help='length of subtrajectory (c)')
     ap.add_argument('--subtraj_num', '-N', metavar='N', type=int, default=-1, help='number of subtrajectories (N)')
-    ap.add_argument('--sliding_window', action='store_true', help='if set, use sliding window for splitting subtrajectories')
+    ap.add_argument('--num_repeat', type=int, default=1, help='number of repeated sampling from buffer')
     ap.add_argument('--latent_dim', '-Z', metavar='dim_Z', type=int, default=8, help='dimension of primitive latent vector (dim(Z))')
 
     # model parameters
@@ -54,10 +54,13 @@ def parse_args():
     ap.add_argument('--print_freq', type=int, default=200, help='training log (stdout) frequency in steps')
     ap.add_argument('--log_freq', type=int, default=200, help='training log (tensorboard) frequency in steps')
     ap.add_argument('--save_freq', type=int, default=100, help='model save frequency in epochs/episodes')
+    ap.add_argument('--eval_freq', type=int, default=10, help='model eval frequency in epochs/episodes')
+    ap.add_argument('--eval_num', type=int, default=5, help='model eval number in epochs/episodes')
 
     # offline
     ap.add_argument('--offline_finetune_epochs', type=int, default=30, help='')
     ap.add_argument('--offline_task_epochs', type=int, default=100, help='')
+    ap.add_argument('--offline_policy_param_str', type=str, default='', help='')
 
     # imitation
     ap.add_argument('--imitation_expert_policy', type=str, default=None, help='path to policy file for expert demo collection')
@@ -68,17 +71,14 @@ def parse_args():
     # online
     ap.add_argument('--online_train_steps', type=int, default=int(2.5e6), help='')
     ap.add_argument('--online_init_random_steps', type=int, default=10000, help='')
+    ap.add_argument('--online_update_interval', type=int, default=1, help='')
     ap.add_argument('--online_updates_per_step', type=int, default=1, help='')
-    ap.add_argument('--online_batch_size', type=int, default=256, help='')
-    ap.add_argument('--online_eval_freq', type=int, default=10, help='')
-    ap.add_argument('--online_eval_episodes', type=int, default=5, help='')
 
     # multi-task
     ap.add_argument('--multitask_train_steps', type=int, default=int(1e7), help='')
+    ap.add_argument('--multitask_init_random_steps', type=int, default=10000, help='')
     ap.add_argument('--multitask_update_interval', type=int, default=4000, help='')
     ap.add_argument('--multitask_updates_per_step', type=int, default=80, help='')
-    ap.add_argument('--multitask_eval_freq', type=int, default=10, help='')
-    ap.add_argument('--multitask_eval_episodes', type=int, default=5, help='')
 
     args = ap.parse_args()
 

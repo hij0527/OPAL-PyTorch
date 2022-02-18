@@ -23,7 +23,7 @@ def parse_args():
     ap.add_argument('--normalize', action='store_true', help='set to normalize states')
     ap.add_argument('--subtraj_len', '-C', metavar='c', type=int, default=10, help='length of subtrajectory (c)')
     ap.add_argument('--subtraj_num', '-N', metavar='N', type=int, default=-1, help='number of subtrajectories (N)')
-    ap.add_argument('--sliding_window', action='store_true', help='if set, use sliding window for splitting subtrajectories')
+    ap.add_argument('--num_repeat', type=int, default=1, help='number of repeated sampling from buffer')
     ap.add_argument('--latent_dim', '-Z', metavar='dim_Z', type=int, default=8, help='dimension of primitive latent vector (dim(Z))')
 
     # model parameters

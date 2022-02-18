@@ -4,6 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from memory.buffer import SubtrajBuffer
+from models.agent import HRLAgent
 from models.opal import OPAL
 from params_task import parse_args
 import utils.env_utils as env_utils
@@ -17,34 +18,37 @@ def main(args):
 
     device = python_utils.get_device(args.gpu_id)
     python_utils.seed_all(args.seed)
-    env = env_utils.get_env(args.domain_name, args.task_name, seed=args.seed)
+    multitask = args.task_type == 'multitask'
+    env = env_utils.make_env(args.domain_name, args.task_name, seed=args.seed, eval=False,
+                             sparse_reward=args.sparse_reward, append_task=multitask)
+    eval_env = env_utils.make_env(args.domain_name, args.task_name, seed=args.seed + 100, eval=True,
+                                  sparse_reward=True, append_task=multitask)
 
     dim_s = np.prod(env.observation_space.shape)
+    dim_s_opal = dim_s - np.prod(env.task_space.shape) if multitask else dim_s
     dim_a = np.prod(env.action_space.shape)
     dim_z = args.latent_dim
 
     if args.verbose:
-        print('Dimensions: obs = {}, act = {}, latent = {}'.format(dim_s, dim_a, dim_z))
+        print('Dimensions: obs = {} (opal: {}), act = {}, latent = {}'.format(dim_s, dim_s_opal, dim_a, dim_z))
 
     # load trained OPAL
-    opal_dim_s = np.prod(env.base_observation_shape) if args.task_type == 'multitask' else dim_s
     opal = OPAL(
-        dim_s=opal_dim_s,
+        dim_s=dim_s_opal,
         dim_a=dim_a,
         dim_z=dim_z,
-        device=device,
         hidden_size=args.opal_hidden_size,
         num_layers=args.opal_num_layers,
         num_gru_layers=args.opal_num_gru_layers,
         state_agnostic=args.opal_state_agnostic,
         unit_prior_std=args.opal_unit_prior_std,
-    )
+    ).to(device)
     opal.load_state_dict(torch.load(args.opal_ckpt))
 
     # set up initial offline dataset
     buffer = SubtrajBuffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len,
-                           sliding_window=args.sliding_window, normalize=args.normalize, verbose=args.verbose)
-    buffer.load_data(sparse_reward=args.sparse_reward, data_dir=args.data_dir, policy_path=args.dataset_policy)
+                           normalize=args.normalize, sparse_reward=args.sparse_reward, verbose=args.verbose)
+    buffer.load_data(data_dir=args.data_dir)
 
     env = env_utils.PreprocObservation(env, buffer.normalize_observation)
     env = env_utils.SilentEnv(env)
@@ -53,105 +57,111 @@ def main(args):
     print('#### Task Policy Training Start ####')
 
     if args.task_type == 'offline':
-        from memory.buffer import FixedBuffer
-        from models.tasks.offline_model import OfflineModel
-        from trainers.batch_trainer import BatchTrainer
+        from memory.buffer import FixedBuffer, RandomSamplingWrapper
+        from trainers.batch_trainer import BatchTrainer, BatchHRLTrainer
 
         # construct a reward-labeled dataset Dr with inferred latents
         label_dataset(buffer, opal, args, device)
+        finetune_buffer = RandomSamplingWrapper(buffer, size_ratio=args.num_repeat / args.subtraj_len)
 
         # finetune primitive policy on Dr
         print('Finetuning primitive policy ...')
-        opal.init_optimizer(args.lr)
-        finetuner = BatchTrainer(logger=logger, tag='opal_finetune',
+        opal.init_optimizers(lr=args.lr)
+        finetuner = BatchTrainer(opal, logger, device, tag='opal_finetune',
                                  print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
-        data_keys = ['observations', 'actions', 'latents']
-        finetuner.train(model=opal, buffer=buffer, data_keys=data_keys, device=device,
-                        num_epochs=args.offline_finetune_epochs, batch_size=args.batch_size, num_workers=args.num_workers,
+        finetuner.train(finetune_buffer, num_epochs=args.offline_finetune_epochs,
+                        batch_size=args.batch_size, num_workers=args.num_workers,
                         finetune=True)
 
         # train task policy on labeled dataset
-        print('Training task policy ...')
-        task_model = OfflineModel(opal, dim_s, dim_z, device, policy_type=args.policy_type,
-                                  hidden_size=args.hidden_size, num_layers=args.num_layers)
-        task_model.init_optimizer(args.lr)
+        # scale_reward = lambda x: np.float32((x - 0.5) * 4.0)  # TODO: from CQL
+        offline_buffer = FixedBuffer(buffer.get_labeled_dataset())  #, preproc={'rewards': scale_reward})
 
-        scale_reward = lambda x: np.float32((x - 0.5) * 4.0)  # TODO
-        offline_buffer = FixedBuffer(buffer.get_labeled_dataset(), preproc={'rewards': scale_reward})
-        trainer = BatchTrainer(logger=logger, tag='offline',
-                               print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
-        data_keys = ['observations', 'actions', 'rewards', 'next_observations', 'terminals']
-        trainer.train(model=task_model, buffer=offline_buffer, data_keys=data_keys, device=device,
-                      num_epochs=args.offline_task_epochs, batch_size=args.batch_size, num_workers=args.num_workers)
+        print('Training task policy ...')
+        model = HRLAgent(args.policy_type, opal, longstep_len=args.subtraj_len,
+                         dim_s=dim_s, dim_z=dim_z,
+                         hidden_size=args.hidden_size, num_layers=args.num_layers,
+                         policy_param_str=args.offline_policy_param_str).to(device)
+        model.init_optimizers()  # TODO
+        trainer = BatchHRLTrainer(model, logger, device, env, eval_env=eval_env, tag='offline',
+                                  print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq,
+                                  eval_freq=args.eval_freq, eval_num=args.eval_num,
+                                  longstep_len=args.subtraj_len)
+        trainer.train(offline_buffer, num_epochs=args.offline_task_epochs,
+                      batch_size=args.batch_size, num_workers=args.num_workers)
 
     elif args.task_type == 'imitation':
-        from models.tasks.imitation_model import ImitationModel
-        from trainers.batch_trainer import BatchTrainer
+        from memory.buffer import RandomSamplingWrapper
+        from trainers.batch_trainer import BatchTrainer, BatchHRLTrainer
 
         # get expert demonstrations
         demos = SubtrajBuffer(args.domain_name, args.task_name, subtraj_len=args.subtraj_len,
-                            sliding_window=args.sliding_window, normalize=False, verbose=args.verbose)
-        demos.load_expert_demos(sparse_reward=args.sparse_reward, data_dir=args.data_dir,
-                                policy_path=args.imitation_expert_policy, num_demos=args.imitation_num_demos)
+                              sliding_window_step=1, normalize=False,
+                              sparse_reward=args.sparse_reward, verbose=args.verbose)
+        demos.load_expert_demos(data_dir=args.data_dir, policy_path=args.imitation_expert_policy,
+                                num_demos=args.imitation_num_demos)
         demos.dataset['observations'] = buffer.normalize_observation(demos.dataset['observations'])
         demos.dataset['next_observations'] = buffer.normalize_observation(demos.dataset['next_observations'])
         label_dataset(demos, opal, args, device)
+        demos = RandomSamplingWrapper(demos, size_ratio=1.)
 
         # finetune primitive policy
         print('Finetuning primitive policy ...')
-        opal.init_optimizer(args.lr)
-        finetuner = BatchTrainer(logger=logger, tag='opal_finetune',
+        opal.init_optimizers(lr=args.lr)
+        finetuner = BatchTrainer(opal, logger, device, tag='opal_finetune',
                                  print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
-        data_keys = ['observations', 'actions', 'latents']
-        # TODO: merge expert_demos with buffer?
-        finetuner.train(model=opal, buffer=demos, data_keys=data_keys, device=device,
-                        num_epochs=args.imitation_finetune_epochs, batch_size=args.batch_size, num_workers=args.num_workers,
+        finetuner.train(demos, num_epochs=args.imitation_finetune_epochs,
+                        batch_size=args.batch_size, num_workers=args.num_workers,
                         finetune=True)
 
-        # train task policy via behavior cloning
+        # train task policy via behavioral cloning
         print('Training task policy ...')
-        task_model = ImitationModel(opal, dim_s, dim_z, device, policy_type=args.policy_type,
-                                    hidden_size=args.hidden_size, num_layers=args.num_layers)
-        task_model.init_optimizer(args.lr)
-        trainer = BatchTrainer(logger=logger, tag='imitation',
-                               print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
-        data_keys = ['observations', 'latents']
+        model = HRLAgent(args.policy_type, opal, longstep_len=args.subtraj_len,
+                         dim_s=dim_s, dim_z=dim_z,
+                         hidden_size=args.hidden_size, num_layers=args.num_layers).to(device)
+        model.init_optimizers()  # TODO
+        trainer = BatchHRLTrainer(model, logger, device, env, eval_env=eval_env, tag='imitation',
+                                  print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq,
+                                  eval_freq=args.eval_freq, eval_num=args.eval_num,
+                                  longstep_len=args.subtraj_len)
         batch_preproc = {'observations': (lambda x: x[:, 0, :])}  # use first states only
-        trainer.train(model=task_model, buffer=demos, data_keys=data_keys, device=device,
-                      num_epochs=args.imitation_task_epochs, batch_size=args.batch_size, num_workers=args.num_workers,
+        trainer.train(demos, num_epochs=args.imitation_task_epochs,
+                      batch_size=args.batch_size, num_workers=args.num_workers,
                       batch_preproc=batch_preproc)
 
     elif args.task_type == 'online':
-        from models.tasks.online_model import OnlineModel
-        from trainers.online_trainer import OnlineTrainer
+        from trainers.online_trainer import OnlineHRLTrainer
 
         # train task policy online
         print('Training task policy ...')
-        task_model = OnlineModel(opal, dim_s, dim_z, device, policy_type=args.policy_type,
-                                 hidden_size=args.hidden_size, num_layers=args.num_layers)
-        task_model.init_optimizer(args.lr)
-        trainer = OnlineTrainer(logger=logger, tag='online',
-                                print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
-        trainer.train(model=task_model, env=env, device=device, longstep_len=args.subtraj_len, train_steps=args.online_train_steps,
-                      init_random_steps=args.online_init_random_steps, updates_per_step=args.online_updates_per_step,
-                      batch_size=args.online_batch_size, eval_freq=args.online_eval_freq, eval_episodes=args.online_eval_episodes)
+        model = HRLAgent(args.policy_type, opal, longstep_len=args.subtraj_len,
+                         dim_s=dim_s, dim_z=dim_z,
+                         hidden_size=args.hidden_size, num_layers=args.num_layers).to(device)
+        model.init_optimizers()  # TODO
+        trainer = OnlineHRLTrainer(model, logger, device, env, eval_env=eval_env, tag='online',
+                                   print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq,
+                                   eval_freq=args.eval_freq, eval_num=args.eval_num,
+                                   longstep_len=args.subtraj_len)
+        trainer.train(train_steps=args.online_train_steps, init_random_steps=args.online_init_random_steps,
+                      update_interval=args.online_update_interval, updates_per_step=args.online_updates_per_step,
+                      batch_size=args.batch_size)
 
     elif args.task_type == 'multitask':
-        from models.tasks.multitask_model import MultitaskModel
-        from trainers.online_trainer import OnlineTrainer
+        from trainers.online_trainer import OnlineHRLTrainer
 
-        # train task policy via online multi-task learning
+        # train task policy online
         print('Training task policy ...')
-        task_model = MultitaskModel(opal, dim_s, dim_z, device, policy_type=args.policy_type,
-                                    hidden_size=args.hidden_size, num_layers=args.num_layers,
-                                    update_epochs=args.multitask_updates_per_step)
-        task_model.init_optimizer(args.lr)
-        trainer = OnlineTrainer(logger=logger, tag='multitask', on_policy=True,  # TODO
-                                print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq)
-        trainer.train(model=task_model, env=env, device=device, longstep_len=args.subtraj_len, train_steps=args.multitask_train_steps,
-                      init_random_steps=0, update_interval=args.multitask_update_interval, updates_per_step=1,  # updates_per_step is fed as arg to task_model
-                      batch_size=args.batch_size, eval_freq=args.multitask_eval_freq, eval_episodes=args.multitask_eval_episodes,
-                      multitask=True)
+        model = HRLAgent(args.policy_type, opal, longstep_len=args.subtraj_len, multitask=True,
+                         dim_s=dim_s, dim_z=dim_z,
+                         hidden_size=args.hidden_size, num_layers=args.num_layers).to(device)
+        model.init_optimizers()  # TODO
+        trainer = OnlineHRLTrainer(model, logger, device, env, eval_env=eval_env, tag='multitask',
+                                   print_freq=args.print_freq, log_freq=args.log_freq, save_freq=args.save_freq,
+                                   eval_freq=args.eval_freq, eval_num=args.eval_num,
+                                   longstep_len=args.subtraj_len)
+        trainer.train(train_steps=args.multitask_train_steps, init_random_steps=args.multitask_init_random_steps,
+                      update_interval=args.multitask_update_interval, updates_per_step=args.multitask_updates_per_step,
+                      batch_size=args.batch_size)
 
     else:
         raise ValueError('Unknown task type: {}'.format(args.task_type))

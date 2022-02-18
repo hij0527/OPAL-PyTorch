@@ -1,6 +1,6 @@
 from collections import OrderedDict
-import gym
 import d4rl
+import gym
 import metaworld
 import numpy as np
 import random
@@ -25,6 +25,7 @@ _TASK_TYPES = OrderedDict({
     'mixed': ['kitchen'],
     'mt10': ['metaworld'],
     'mt50': ['metaworld'],
+    'pick-place': ['metaworld'],
 })
 
 
@@ -38,6 +39,7 @@ _ENV_NAMES = {
     ('kitchen', 'mixed'): 'kitchen-mixed-v0',
     ('metaworld', 'mt10'): 'metaworld-mt10-v2',
     ('metaworld', 'mt50'): 'metaworld-mt50-v2',
+    ('metaworld', 'pick-place'): 'metaworld-pick-place-v2',
 }
 
 
@@ -47,31 +49,49 @@ def get_env_name(domain_name, task_name):
     return _ENV_NAMES[(domain_name, task_name)]
 
 
-def get_antmaze_env(maze, multi_start=True, eval=False):
+def make_antmaze_train_env(maze, sparse_reward=True, multi_start=True):
     from d4rl.locomotion import maze_env, ant
-    from d4rl.locomotion.wrappers import NormalizedBoxEnv
 
+    # note: gym is using EVAL mazes
     maze_map = {
         'umaze': maze_env.U_MAZE,
         'medium': maze_env.BIG_MAZE,
         'large': maze_env.HARDEST_MAZE,
-        'umaze_eval': maze_env.U_MAZE_EVAL,
-        'medium_eval': maze_env.BIG_MAZE_EVAL,
-        'large_eval': maze_env.HARDEST_MAZE_EVAL
     }[maze]
 
-    return NormalizedBoxEnv(ant.AntMazeEnv(maze_map=maze_map, maze_size_scaling=4.0, non_zero_reset=multi_start, eval=eval))
+    maze_kwargs = {
+        'maze_map': maze_map,
+        'reward_type': 'sparse' if sparse_reward else 'dense',
+        'non_zero_reset': multi_start,
+        'eval': True,
+        'maze_size_scaling': 4.0,
+        'v2_resets': True,
+    }
+
+    with SuppressStdout():
+        env = ant.make_ant_maze_env(**maze_kwargs)
+
+    return TimeoutEnv(env, 1000, name=get_env_name('antmaze', maze))
 
 
-def get_metaworld_mt_env(env_name, mt_type, seed, task_agnostic):
+def make_metaworld_mt_env(env_name, mt_type, seed, append_task, sparse_reward):
     if mt_type == 'mt10':
         benchmark_cls = metaworld.MT10
+        task_env_name = None
     elif mt_type == 'mt50':
         benchmark_cls = metaworld.MT50
+        task_env_name = None
     else:
-        raise ValueError
+        benchmark_cls = metaworld.MT1
+        task_env_name = mt_type
+        if not task_env_name.endswith('-v2'):
+            task_env_name += '-v2'
 
-    benchmark = benchmark_cls(seed=seed)
+    if task_env_name is None:
+        benchmark = benchmark_cls(seed=seed)
+    else:
+        benchmark = benchmark_cls(task_env_name, seed=seed)
+
     training_envs = []
     for name, env_cls in benchmark.train_classes.items():
         env = env_cls()
@@ -79,19 +99,29 @@ def get_metaworld_mt_env(env_name, mt_type, seed, task_agnostic):
         env.set_task(task)
         training_envs.append(env)
 
-    return MultiTaskEnv(training_envs, env_name, mode='vanilla' if task_agnostic else 'add-onehot')
+    return MultiTaskEnv(training_envs, env_name, mode='add-onehot' if append_task else 'vanilla',
+                        sparse_reward=sparse_reward)
 
 
-def get_env(domain_name, task_name, seed=None, task_agnostic=False):
+def make_env(domain_name, task_name, seed=None, sparse_reward=True, append_task=False, eval=True, silent=True):
     env_name = get_env_name(domain_name, task_name)
-    env_type = _DOMAIN_TYPES[domain_name]
-    if env_type == 'd4rl':
-        with SuppressStdout():
+    with SuppressStdout():
+        if domain_name == 'antmaze':
+            if eval:
+                env = gym.make(env_name)
+            else:
+                env = make_antmaze_train_env(maze=task_name, sparse_reward=sparse_reward)
+        elif domain_name == 'kitchen':
             env = gym.make(env_name)
-            # env = get_antmaze_env(maze=task_name, multi_start=True, eval=True)
-    elif env_type == 'metaworld':
-        env = get_metaworld_mt_env(env_name, task_name, seed, task_agnostic)
+        elif domain_name == 'metaworld':
+            env = make_metaworld_mt_env(env_name, task_name, seed, append_task, sparse_reward)
+
+    if silent:
+        env = SilentEnv(env)
+
     env.seed(seed)
+    if hasattr(env.observation_space, 'seed') and callable(env.observation_space.seed):
+        env.observation_space.seed(seed)
     if hasattr(env.action_space, 'seed') and callable(env.action_space.seed):
         env.action_space.seed(seed)
     return env
@@ -119,12 +149,34 @@ class SilentEnv(gym.Wrapper):
             return self.env.reset(**kwargs)
 
 
+class TimeoutEnv(gym.Wrapper):
+    def __init__(self, env, timeout, name=None):
+        super().__init__(env)
+        self.curr_step = 0
+        if not env.spec:
+            env.spec = gym.envs.registration.EnvSpec(id=name)
+        env.spec.max_episode_steps = timeout
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        self.curr_step += 1
+        if self.curr_step == self.env.spec.max_episode_steps:
+            done = True
+            if 'timeout' not in info:
+                info['timeout'] = True
+        return obs, reward, done, info
+
+    def reset(self, **kwargs):
+        self.curr_step = 0
+        return self.env.reset(**kwargs)
+
+
 class MultiTaskEnv(gym.Wrapper):
     """Multi-task environment wrapper.
     Code adopted from https://github.com/rlworkgroup/garage/blob/master/src/garage/envs/multi_env_wrapper.py
     """
 
-    def __init__(self, envs, name, mode='vanilla'):
+    def __init__(self, envs, name, mode='vanilla', sparse_reward=False):
         assert mode in ['vanilla', 'add-onehot', 'del-onehot']
         super().__init__(envs[0])
         assert all(env.observation_space.shape == envs[0].observation_space.shape for env in envs)
@@ -133,6 +185,7 @@ class MultiTaskEnv(gym.Wrapper):
         self.envs = envs
         self.num_tasks = len(envs)
         self.mode = mode
+        self.sparse_reward = sparse_reward
         self.active_task_index = None
         self.is_metaworld = isinstance(self.envs[0], metaworld.envs.mujoco.mujoco_env.MujocoEnv)
 
@@ -148,12 +201,12 @@ class MultiTaskEnv(gym.Wrapper):
         self._observation_space = gym.spaces.Box(low=obs_low, high=obs_high)
 
         if self.is_metaworld:
-            self.max_episode_length = self.envs[0].max_path_length
+            self.max_episode_steps = self.envs[0].max_path_length
         else:
-            self.max_episode_length = self.envs[0].spec.max_episode_length
+            self.max_episode_steps = self.envs[0].spec.max_episode_steps
 
         self._spec = gym.envs.registration.EnvSpec(id=name)
-        self._spec.max_episode_length = self.max_episode_length
+        self._spec.max_episode_steps = self.max_episode_steps
 
         self._timestep = 0
 
@@ -185,14 +238,19 @@ class MultiTaskEnv(gym.Wrapper):
             info['task_id'] = self.active_task_index
         if self.is_metaworld:
             done |= bool(info['success'])
+        if self.sparse_reward:
+            if self.is_metaworld:
+                reward = float(info['success'])
         self._timestep += 1
-        if self._timestep >= self.max_episode_length:
+        if self._timestep >= self.max_episode_steps:
             done = True
         return self._preproc_obs(obs), reward, done, info
 
     def seed(self, seed):
         for env in self.envs:
             env.seed(seed)
+            if hasattr(env.observation_space, 'seed') and callable(env.observation_space.seed):
+                env.observation_space.seed(seed)
             if hasattr(env.action_space, 'seed') and callable(env.action_space.seed):
                 env.action_space.seed(seed)
         return super().seed(seed)

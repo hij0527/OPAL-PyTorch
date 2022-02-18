@@ -1,10 +1,10 @@
 import argparse
-import json
 import numpy as np
 import os
 import time
 import torch
 
+from models.agent import HRLAgent
 from models.opal import OPAL
 import utils.env_utils as env_utils
 import utils.python_utils as python_utils
@@ -23,7 +23,7 @@ def parse_args():
 
     ap.add_argument('--domain_name', type=str, choices=env_utils.DOMAIN_NAMES, default=env_utils.DOMAIN_NAMES[0], help='environment domain name')
     ap.add_argument('--task_name', type=str, choices=env_utils.TASK_NAMES, default=env_utils.TASK_NAMES[0], help='environment task name')
-    ap.add_argument('--sparse_reward', action='store_true', help='sparse reward mode')
+    ap.add_argument('--dense_reward', action='store_false', dest='sparse_reward', help='sparse reward mode')
     ap.add_argument('--subtraj_len', '-C', type=int, default=10, help='length of subtrajectory (c)')
     ap.add_argument('--latent_dim', '-Z', type=int, default=8, help='dimension of primitive latent vector (dim(Z))')
 
@@ -56,72 +56,59 @@ def parse_args():
 def test(args):
     device = python_utils.get_device(args.gpu_id)
     python_utils.seed_all(args.seed)
-    env = env_utils.get_env(args.domain_name, args.task_name, seed=args.seed)
+    multitask = args.task_type == 'multitask'
+    env = env_utils.make_env(args.domain_name, args.task_name, seed=args.seed, eval=True,
+                             sparse_reward=True, append_task=multitask)
 
-    dim_s = env.observation_space.shape[0]
-    dim_a = env.action_space.shape[0]
+    dim_s = np.prod(env.observation_space.shape)
+    dim_s_opal = dim_s - np.prod(env.task_space.shape) if multitask else dim_s
+    dim_a = np.prod(env.action_space.shape)
     dim_z = args.latent_dim
 
     # load trained OPAL
     opal = OPAL(
-        dim_s=dim_s,
+        dim_s=dim_s_opal,
         dim_a=dim_a,
         dim_z=dim_z,
-        device=device,
         hidden_size=args.opal_hidden_size,
         num_layers=args.opal_num_layers,
         num_gru_layers=args.opal_num_gru_layers,
         state_agnostic=args.opal_state_agnostic,
         unit_prior_std=args.opal_unit_prior_std,
-    )
+    ).to(device)
     opal.load_state_dict(torch.load(args.opal_ckpt))
 
     # load trained task model
-    if args.task_type == 'offline':
-        from models.tasks.offline_model import OfflineModel
-        task_model = OfflineModel(opal, dim_s, dim_z, device, policy_type=args.policy_type,
-                                  hidden_size=args.hidden_size, num_layers=args.num_layers)
-    elif args.task_type == 'imitation':
-        from models.tasks.imitation_model import ImitationModel
-        task_model = ImitationModel(opal, dim_s, dim_z, device, policy_type=args.policy_type,
-                                    hidden_size=args.hidden_size, num_layers=args.num_layers)
-    elif args.task_type == 'online':
-        from models.tasks.online_model import OnlineModel
-        task_model = OnlineModel(opal, dim_s, dim_z, device, policy_type=args.policy_type,
-                                 hidden_size=args.hidden_size, num_layers=args.num_layers)
-    elif args.task_type == 'multitask':
-        from models.tasks.multitask_model import MultitaskModel
-        task_model = MultitaskModel(opal, dim_s, dim_z, device, policy_type=args.policy_type,
-                                    hidden_size=args.hidden_size, num_layers=args.num_layers,
-                                    update_epochs=args.multitask_updates_per_step)
-    else:
-        raise ValueError('Unknown task type: {}'.format(args.task_type))
-
-    task_model.load_state_dict(torch.load(args.task_ckpt))
+    model = HRLAgent(args.policy_type, opal, longstep_len=args.subtraj_len, multitask=multitask,
+                     dim_s=dim_s, dim_z=dim_z,
+                     hidden_size=args.hidden_size, num_layers=args.num_layers).to(device)
+    model.load_state_dict(torch.load(args.task_ckpt))
 
     # rollout
     returns = []
+    successes = []
     ep_lengths = []
+
     for ep_num in range(1, args.test_episodes + 1):
         tic = time.time()
-        with python_utils.SuppressStdout():
-            obs, ret, done = env.reset(), 0., False
-        ep_len = 0
+        obs, ret, done, success = env.reset(), 0., False, False
+        step, ep_len = 0, 0
 
         while not done:
-            with torch.no_grad():
-                action = task_model.get_action(obs, deterministic=True).cpu().numpy()
-            with python_utils.SuppressStdout():
-                next_obs, r, done, _ = env.step(action)
+            next_step, next_obs, r, done, success, *_ = model.rollout_step(env, step, obs, deterministic=True)
             ret += r
-            ep_len += 1
+            ep_len += next_step - step
+            step = next_step
             obs = next_obs
 
         returns.append(ret)
+        successes.append(float(success))
         ep_lengths.append(ep_len)
-        print('[ep {}] ret: {:.2f}, len: {:d} (time: {:.2f}s)'.format(ep_num, ret, ep_len, time.time() - tic))
+        print('[ep {}] ret: {:.2f}, success: {}, len: {:d} (time: {:.2f}s)'.format(
+            ep_num, ret, success, ep_len, time.time() - tic))
 
     print('avg return: {:.2f}'.format(np.mean(returns)))
+    print('avg success: {:.2f}'.format(np.mean(successes)))
     print('avg length: {:.1f}'.format(np.mean(ep_lengths)))
 
 

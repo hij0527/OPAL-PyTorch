@@ -15,6 +15,7 @@ class BC(nn.Module):
         num_layers=3,
     ):
         super().__init__()
+        self.is_optimizer_initialized = False
         self.policy = TaskPolicy(dim_s, dim_a, hidden_size, num_layers)
         self.optimizer = None
         self.update_step = 0
@@ -24,9 +25,10 @@ class BC(nn.Module):
 
     def init_optimizers(self, lr=3e-4):
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=lr)
+        self.is_optimizer_initialized = True
 
-    def update(self, samples):
-        state_batch, action_batch = samples
+    def update(self, samples, **kwargs):
+        state_batch, action_batch = samples['observations'], samples['actions']
 
         mean_a, logstd_a = self.policy(state_batch)
 
@@ -45,12 +47,15 @@ class BC(nn.Module):
     def state_dict(self):
         state_dict = {
             'policy': self.policy.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
         }
+        if self.is_optimizer_initialized:
+            state_dict.update({
+                'optimizer': self.optimizer.state_dict(),
+            })
         return state_dict
 
     # Load model parameters
     def load_state_dict(self, state_dict):
         self.policy.load_state_dict(state_dict['policy'])
-        if self.optimizer is not None:
+        if self.is_optimizer_initialized:
             self.optimizer.load_state_dict(state_dict['optimizer'])

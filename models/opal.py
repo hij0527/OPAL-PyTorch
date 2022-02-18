@@ -12,37 +12,42 @@ class OPAL:
         dim_s,
         dim_a,
         dim_z,
-        device,
         hidden_size=200,
         num_layers=2,
         num_gru_layers=4,
         state_agnostic=False,
         unit_prior_std=False,
     ):
-        self.device = device
         self.state_agnostic = state_agnostic
 
         # encoder (q_phi)
         if state_agnostic:
-            self.encoder = EncoderStateAgnostic(dim_s, dim_a, dim_z, hidden_size, num_layers, num_gru_layers).to(device)
+            self.encoder = EncoderStateAgnostic(dim_s, dim_a, dim_z, hidden_size, num_layers, num_gru_layers)
         else:
-            self.encoder = Encoder(dim_s, dim_a, dim_z, hidden_size, num_layers, num_gru_layers).to(device)
+            self.encoder = Encoder(dim_s, dim_a, dim_z, hidden_size, num_layers, num_gru_layers)
 
         # primitive policy (pi_theta)
         if state_agnostic:
-            self.primitive_policy = PrimitivePolicyStateAgnostic(dim_z, dim_a, hidden_size, num_gru_layers).to(device)
+            self.primitive_policy = PrimitivePolicyStateAgnostic(dim_z, dim_a, hidden_size, num_gru_layers)
         else:
-            self.primitive_policy = PrimitivePolicy(dim_s, dim_z, dim_a, hidden_size, num_layers).to(device)
+            self.primitive_policy = PrimitivePolicy(dim_s, dim_z, dim_a, hidden_size, num_layers)
 
         # prior (rho_omega)
-        self.prior = Prior(dim_s, dim_z, hidden_size, num_layers, unit_prior_std=unit_prior_std).to(device)
+        self.prior = Prior(dim_s, dim_z, hidden_size, num_layers, unit_prior_std=unit_prior_std)
 
         self.models = [self.encoder, self.primitive_policy, self.prior]
         self.optimizer = None
+        self.device = None
 
         self.update_step = 0
 
-    def init_optimizer(self, lr):
+    def to(self, device):
+        self.device = device
+        for m in self.models:
+            m.to(device)
+        return self
+
+    def init_optimizers(self, lr=3e-4):
         self.optimizer = Adam([p for m in self.models for p in list(m.parameters())], lr=lr)
 
     def update(self, samples, **kwargs):
@@ -53,29 +58,50 @@ class OPAL:
         else:
             return self._update(samples, **kwargs)
 
+    @torch.no_grad()
+    def evaluate(self, samples):
+        states, actions = samples['observations'], samples['actions']
+        prior_latents, _ = self.prior(states[:, 0])
+        latents = self.encode(states, actions)
+        prior_mse = torch.nn.MSELoss()(prior_latents, latents)
+
+        latents_dup = latents.unsqueeze(1).repeat(1, states.shape[1], 1)
+        recon_actions, _ = self.get_action(states, latents_dup, deterministic=True)
+        recon_l1 = torch.nn.L1Loss()(actions, recon_actions)
+        recon_l2 = torch.nn.MSELoss()(actions, recon_actions)
+        return {'prior_mse': prior_mse.item(), 'recon_l1': recon_l1.item(), 'recon_l2': recon_l2.item()}
+
     def encode(self, states, actions):
         mean_z, _ = self.encoder(states[:, 0] if self.state_agnostic else states, actions)
         return mean_z
 
-    def get_action_from_primitive(self, state, latent, deterministic=False, return_mean_std=False):
-        state = torch.as_tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
-        latent = torch.as_tensor(latent, dtype=torch.float32, device=self.device).unsqueeze(0)
+    def get_action(self, state, latent, deterministic=False):
+        state = torch.as_tensor(state, dtype=torch.float32, device=self.device)
+        latent = torch.as_tensor(latent, dtype=torch.float32, device=self.device)
+
+        if len(state.shape) < 3:
+            state, latent = state.unsqueeze(0), latent.unsqueeze(0)
+            squeeze = True
+        else:
+            squeeze = False
 
         if self.state_agnostic:
             mean_a, logstd_a = self.primitive_policy(latent)
         else:
             mean_a, logstd_a = self.primitive_policy(state, latent)
 
-        mean_a, logstd_a = mean_a.squeeze(0), logstd_a.squeeze(0)
+        if squeeze:
+            mean_a, logstd_a = mean_a.squeeze(0), logstd_a.squeeze(0)
 
         if deterministic:
             action = mean_a
+            logprob = torch.zeros_like(action, device=self.device).sum(-1)
         else:
-            action = Normal(mean_a, logstd_a.exp()).rsample()
+            dist = Normal(mean_a, logstd_a.exp())
+            action = dist.rsample()
+            logprob = dist.log_prob(action).sum(-1)
 
-        if return_mean_std:
-            return action, mean_a, logstd_a
-        return action
+        return action, logprob
 
     def state_dict(self):
         return {
@@ -93,7 +119,7 @@ class OPAL:
             self.optimizer.load_state_dict(state_dict['optimizer'])
 
     def _update(self, samples, **kwargs):  # shape of states: (batch_size, subtraj_size, dim_s)
-        states, actions = samples
+        states, actions = samples['observations'], samples['actions']
         # shape of states: (batch_size, subtraj_size, dim_s)
         batch_size, subtraj_len = states.shape[0], states.shape[1]
 
@@ -151,7 +177,7 @@ class OPAL:
         }
 
     def _finetune(self, samples, **kwargs):
-        states, actions, latents = samples
+        states, actions, latents = samples['observations'], samples['actions'], samples['latents']
         batch_size, subtraj_len = states.shape[0], states.shape[1]
 
         # behavior cloning; same as minimizing negative log likelihood (Eq. 3)
