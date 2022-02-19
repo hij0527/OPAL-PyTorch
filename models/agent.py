@@ -17,8 +17,8 @@ class RLAgent:
     def init_optimizers(self, **lrs):
         self.policy.init_optimizers(**lrs)
 
-    def update(self, samples, **kwargs):
-        return self.policy.update(samples, **kwargs)
+    def update(self, buffer, batch_size, num_updates, **kwargs):
+        return self.policy.update(buffer, batch_size, num_updates, **kwargs)
 
     def get_action(self, state, deterministic=True):
         state = torch.as_tensor(state, dtype=torch.float32, device=self.device)
@@ -100,10 +100,10 @@ class HRLAgent(RLAgent):
         self.opal.to(device)
         return self
 
-    def update(self, samples, **kwargs):
+    def update(self, buffer, batch_size, num_updates, **kwargs):
         if self.policy_type == 'sac':
             kwargs.update({'prior_model': self.opal.prior})
-        return super().update(samples, **kwargs)
+        return super().update(buffer, batch_size, num_updates, **kwargs)
 
     def get_primitive(self, state, deterministic=False):
         return super().get_action(state, deterministic)

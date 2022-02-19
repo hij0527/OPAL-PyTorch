@@ -50,9 +50,9 @@ class OPAL:
     def init_optimizers(self, lr=3e-4):
         self.optimizer = Adam([p for m in self.models for p in list(m.parameters())], lr=lr)
 
-    def update(self, samples, **kwargs):
+    def update(self, buffer, batch_size, num_updates=1, **kwargs):
+        samples = buffer.sample(batch_size, to_tensor=True, device=self.device)
         finetune = kwargs.pop('finetune', False)
-
         if finetune:
             return self._finetune(samples, **kwargs)
         else:

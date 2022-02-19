@@ -1,5 +1,6 @@
 from torch.utils.data import DataLoader
 
+from memory.replay_buffer import FixedReplayBuffer
 from trainers.base_trainer import BaseTrainer, BaseRLTrainer, BaseHRLTrainer
 
 
@@ -32,7 +33,8 @@ class BatchTrainer(BaseTrainer):
             for i, batch in enumerate(data_loader):
                 samples = self.preproc_batch(batch, batch_preproc)
                 num_data = next(iter(samples.values())).shape[0]
-                loss, sublosses = self.model.update(samples, **train_params)
+                simple_buffer = FixedReplayBuffer(samples)
+                loss, sublosses = self.model.update(simple_buffer, batch_size, 1, **train_params)
                 epoch_loss += loss * num_data
                 total_num_data += num_data
                 train_step += 1

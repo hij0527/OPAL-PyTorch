@@ -12,7 +12,7 @@ class OnlineRLTrainer(BaseRLTrainer):
 
         self.replay_buffer = ReplayBuffer(
             max_size=self.args.max_buffer_size,
-            data_keys=['observations', 'actions', 'rewards', 'next_observations', 'successes', 'logprobs'],
+            data_keys=['observations', 'actions', 'rewards', 'next_observations', 'terminals', 'successes', 'logprobs'],
         )
 
     def _default_args(self):
@@ -49,7 +49,7 @@ class OnlineRLTrainer(BaseRLTrainer):
                     self.env, episode_step, observation, rand=self.env_step < init_random_steps)
                 self.env_step += next_step - episode_step
 
-                self.replay_buffer.add((observation, action, reward, next_observation, success, logprob))
+                self.replay_buffer.add((observation, action, reward, next_observation, done, success, logprob))
                 self.update_model(update_interval, updates_per_step, batch_size)
                 self.adjust_model_params()
 
@@ -68,23 +68,9 @@ class OnlineRLTrainer(BaseRLTrainer):
 
     def update_model(self, update_interval, updates_per_step, batch_size):
         self.update_step += 1
-        if updates_per_step == 0:
-            return
-
-        if self.model.on_policy:
-            batch_size = update_interval
-            update_kwargs = {'updates_per_step': updates_per_step}
-            updates_per_step = 1
-        else:
-            update_kwargs = {}
-
         if self.update_step % update_interval == 0 and len(self.replay_buffer) >= batch_size:
-            for _ in range(updates_per_step):
-                samples = self.replay_buffer.sample(size=batch_size, to_tensor=True, device=self.device)
-                loss, sublosses = self.model.update(samples, **update_kwargs)
+            loss, sublosses = self.model.update(self.replay_buffer, batch_size, updates_per_step)
             self.log_losses(self.update_step, loss, sublosses)
-            if self.model.on_policy:
-                self.replay_buffer.clear()
 
     def adjust_model_params(self):
         if hasattr(self.model, 'adjust_params'):

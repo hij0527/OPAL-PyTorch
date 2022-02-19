@@ -97,127 +97,141 @@ class CQL(SAC):
         if self.with_lagrange:
             self.alpha_prime_optim = Adam([self.log_alpha_prime], lr=lr_critic)
 
-    def update(self, samples, **kwargs):
-        state_batch, action_batch, next_state_batch = samples['observations'], samples['actions'], samples['next_observations']
-        reward_batch = samples['rewards'].unsqueeze(-1)
-        mask_batch = torch.logical_not(samples['successes']).to(state_batch.dtype).unsqueeze(-1)
+    def update(self, buffer, batch_size, num_updates=1, **kwargs):
+        losses = []
+        sublosses = []
+        for _ in range(num_updates):
+            samples = buffer.sample(batch_size, to_tensor=True, device=next(self.policy.parameters()).device)
+            state_batch, next_state_batch = samples['observations'], samples['next_observations']
+            action_batch = samples['actions']
+            reward_batch = samples['rewards'].unsqueeze(-1)
+            mask_batch = torch.logical_not(samples['successes']).to(state_batch.dtype).unsqueeze(-1)
 
-        if self.adjust_action_range:
-            self._update_action_range(action_batch)
+            if self.adjust_action_range:
+                self._update_action_range(action_batch)
 
-        # Update Q
-        qf1 = self.critic1(state_batch, action_batch)
-        qf2 = self.critic2(state_batch, action_batch)
+            # Update Q
+            qf1 = self.critic1(state_batch, action_batch)
+            qf2 = self.critic2(state_batch, action_batch)
 
-        # Compute target Q values for next states
-        with torch.no_grad():
-            if self.max_q_backup:
-                # select maximum Q values among N sampled actions
-                num_actions = 10
-                next_action, _ = self._sample_multiple_actions(next_state_batch, num_actions=num_actions)
-                next_state_mul = next_state_batch.unsqueeze(0).repeat(num_actions, 1, 1)
-                qf1_next_target = self.critic_target1(next_state_mul, next_action).max(0)[0]
-                qf2_next_target = self.critic_target2(next_state_mul, next_action).max(0)[0]
-                min_qf_next_target = torch.min(qf1_next_target, qf2_next_target)
+            # Compute target Q values for next states
+            with torch.no_grad():
+                if self.max_q_backup:
+                    # select maximum Q values among N sampled actions
+                    num_actions = 10
+                    next_action, _ = self._sample_multiple_actions(next_state_batch, num_actions=num_actions)
+                    next_state_mul = next_state_batch.unsqueeze(0).repeat(num_actions, 1, 1)
+                    qf1_next_target = self.critic_target1(next_state_mul, next_action).max(0)[0]
+                    qf2_next_target = self.critic_target2(next_state_mul, next_action).max(0)[0]
+                    min_qf_next_target = torch.min(qf1_next_target, qf2_next_target)
+                else:
+                    next_action, next_entropy, _ = self._sample_action_with_entropy(next_state_batch)
+                    qf1_next_target = self.critic_target1(next_state_batch, next_action)
+                    qf2_next_target = self.critic_target2(next_state_batch, next_action)
+                    min_qf_next_target = torch.min(qf1_next_target, qf2_next_target)
+                    if not self.deterministic_backup:
+                        min_qf_next_target -= self.alpha.item() * next_entropy
+
+                next_q_value = reward_batch + mask_batch * self.gamma * min_qf_next_target
+
+            qf1_loss = F.mse_loss(qf1, next_q_value)
+            qf2_loss = F.mse_loss(qf2, next_q_value)
+
+            # CQL loss
+            with torch.no_grad():
+                state_mul = state_batch.unsqueeze(0).repeat(self.num_random, 1, 1)
+                # random_action_mul = torch.empty_like(action_batch).unsqueeze(0).repeat(self.num_random, 1, 1).uniform_(-1, 1)
+                random_action_mul = self._sample_random_actions((self.num_random,) + action_batch.shape[:-1], action_batch.device)
+                new_action1_mul, new_entropy1_mul = self._sample_multiple_actions(state_batch, num_actions=self.num_random)
+                new_action2_mul, new_entropy2_mul = self._sample_multiple_actions(next_state_batch, num_actions=self.num_random)
+
+            qf1_rand_mul = self.critic1(state_mul, random_action_mul)
+            qf2_rand_mul = self.critic2(state_mul, random_action_mul)
+            qf1_new1_mul = self.critic1(state_mul, new_action1_mul)
+            qf2_new1_mul = self.critic2(state_mul, new_action1_mul)
+            qf1_new2_mul = self.critic1(state_mul, new_action2_mul)  # note: it is correct to use state, not next_state
+            qf2_new2_mul = self.critic2(state_mul, new_action2_mul)  # https://github.com/aviralkumar2907/CQL/issues/4
+
+            if self.reg_type == 'H':
+                random_density = -action_batch.shape[-1] * np.log(2)
+                qf1_agg = torch.cat((qf1_rand_mul - random_density, qf1_new2_mul - new_entropy2_mul, qf1_new1_mul - new_entropy1_mul))
+                qf2_agg = torch.cat((qf2_rand_mul - random_density, qf2_new2_mul - new_entropy2_mul, qf2_new1_mul - new_entropy1_mul))
             else:
-                next_action, next_entropy, _ = self._sample_action_with_entropy(next_state_batch)
-                qf1_next_target = self.critic_target1(next_state_batch, next_action)
-                qf2_next_target = self.critic_target2(next_state_batch, next_action)
-                min_qf_next_target = torch.min(qf1_next_target, qf2_next_target)
-                if not self.deterministic_backup:
-                    min_qf_next_target -= self.alpha.item() * next_entropy
+                qf1_agg = torch.cat((qf1_rand_mul, qf1.unsqueeze(0), qf1_new2_mul, qf1_new1_mul))
+                qf2_agg = torch.cat((qf2_rand_mul, qf2.unsqueeze(0), qf2_new2_mul, qf2_new1_mul))
 
-            next_q_value = reward_batch + mask_batch * self.gamma * min_qf_next_target
+            min_qf1_loss = torch.logsumexp(qf1_agg / self.temperature, dim=0).mean() * self.temperature - qf1.mean()
+            min_qf2_loss = torch.logsumexp(qf2_agg / self.temperature, dim=0).mean() * self.temperature - qf2.mean()
 
-        qf1_loss = F.mse_loss(qf1, next_q_value)
-        qf2_loss = F.mse_loss(qf2, next_q_value)
+            if self.with_lagrange:
+                min_qf1_loss -= self.target_action_gap
+                min_qf2_loss -= self.target_action_gap
 
-        # CQL loss
-        with torch.no_grad():
-            state_mul = state_batch.unsqueeze(0).repeat(self.num_random, 1, 1)
-            # random_action_mul = torch.empty_like(action_batch).unsqueeze(0).repeat(self.num_random, 1, 1).uniform_(-1, 1)
-            random_action_mul = self._sample_random_actions((self.num_random,) + action_batch.shape[:-1], action_batch.device)
-            new_action1_mul, new_entropy1_mul = self._sample_multiple_actions(state_batch, num_actions=self.num_random)
-            new_action2_mul, new_entropy2_mul = self._sample_multiple_actions(next_state_batch, num_actions=self.num_random)
+            critic_loss = qf1_loss + qf2_loss + self.alpha_prime.item() * (min_qf1_loss + min_qf2_loss)
+            self.critic_optim.zero_grad()
+            critic_loss.backward()
+            self.critic_optim.step()
 
-        qf1_rand_mul = self.critic1(state_mul, random_action_mul)
-        qf2_rand_mul = self.critic2(state_mul, random_action_mul)
-        qf1_new1_mul = self.critic1(state_mul, new_action1_mul)
-        qf2_new1_mul = self.critic2(state_mul, new_action1_mul)
-        qf1_new2_mul = self.critic1(state_mul, new_action2_mul)  # note: it is correct to use state, not next_state
-        qf2_new2_mul = self.critic2(state_mul, new_action2_mul)  # https://github.com/aviralkumar2907/CQL/issues/4
+            # Update policy
+            action, entropy, _ = self._sample_action_with_entropy(state_batch)
 
-        if self.reg_type == 'H':
-            random_density = -action_batch.shape[-1] * np.log(2)
-            qf1_agg = torch.cat((qf1_rand_mul - random_density, qf1_new2_mul - new_entropy2_mul, qf1_new1_mul - new_entropy1_mul))
-            qf2_agg = torch.cat((qf2_rand_mul - random_density, qf2_new2_mul - new_entropy2_mul, qf2_new1_mul - new_entropy1_mul))
-        else:
-            qf1_agg = torch.cat((qf1_rand_mul, qf1.unsqueeze(0), qf1_new2_mul, qf1_new1_mul))
-            qf2_agg = torch.cat((qf2_rand_mul, qf2.unsqueeze(0), qf2_new2_mul, qf2_new1_mul))
+            if self.update_step < self.init_bc_steps:
+                # behavioral cloning
+                min_qf_pi = -self._get_entropy(state_batch, action_batch)
+            else:
+                qf1_pi = self.critic1(state_batch, action)
+                qf2_pi = self.critic2(state_batch, action)
+                min_qf_pi = -torch.min(qf1_pi, qf2_pi)
 
-        min_qf1_loss = torch.logsumexp(qf1_agg / self.temperature, dim=0).mean() * self.temperature - qf1.mean()
-        min_qf2_loss = torch.logsumexp(qf2_agg / self.temperature, dim=0).mean() * self.temperature - qf2.mean()
+            policy_loss = (self.alpha.item() * entropy + min_qf_pi).mean()
+            self.policy_optim.zero_grad()
+            policy_loss.backward()
+            self.policy_optim.step()
 
-        if self.with_lagrange:
-            min_qf1_loss -= self.target_action_gap
-            min_qf2_loss -= self.target_action_gap
+            # Update alpha
+            if self.automatic_entropy_tuning:
+                alpha_loss = -self.log_alpha * (entropy + self.target_entropy).detach().mean()
+                self.alpha_optim.zero_grad()
+                alpha_loss.backward()
+                self.alpha_optim.step()
+            else:
+                alpha_loss = torch.tensor(0., device=policy_loss.device)
 
-        qf_loss = qf1_loss + qf2_loss + self.alpha_prime.item() * (min_qf1_loss + min_qf2_loss)
-        self.critic_optim.zero_grad()
-        qf_loss.backward()
-        self.critic_optim.step()
+            # Update alpha prime
+            if self.with_lagrange:
+                alpha_prime_loss = -0.5 * self.alpha_prime * (min_qf1_loss + min_qf2_loss).detach()
+                self.alpha_prime_optim.zero_grad()
+                alpha_prime_loss.backward()
+                self.alpha_prime_optim.step()
+            else:
+                alpha_prime_loss = torch.tensor(0., device=policy_loss.device)
 
-        # Update policy
-        action, entropy, _ = self._sample_action_with_entropy(state_batch)
+            losses.append(torch.tensor(0.))
+            sublosses.append(torch.stack([
+                policy_loss, critic_loss, alpha_loss, alpha_prime_loss,
+                min_qf_pi.mean(), entropy.mean(),
+                qf1_loss, qf2_loss, min_qf1_loss, min_qf2_loss,
+            ]).detach())
 
-        if self.update_step < self.init_bc_steps:
-            # behavioral cloning
-            min_qf_pi = self._get_entropy(state_batch, action_batch)
-        else:
-            qf1_pi = self.critic1(state_batch, action)
-            qf2_pi = self.critic2(state_batch, action)
-            min_qf_pi = torch.min(qf1_pi, qf2_pi)
+            self.update_step += 1
+            if self.update_step % self.target_update_interval == 0:
+                soft_update(self.critic_target1, self.critic1, self.tau)
+                soft_update(self.critic_target2, self.critic2, self.tau)
 
-        policy_loss = (self.alpha.item() * entropy - min_qf_pi).mean()
-        self.policy_optim.zero_grad()
-        policy_loss.backward()
-        self.policy_optim.step()
-
-        # Update alpha
-        if self.automatic_entropy_tuning:
-            alpha_loss = -self.log_alpha * (entropy + self.target_entropy).detach().mean()
-            self.alpha_optim.zero_grad()
-            alpha_loss.backward()
-            self.alpha_optim.step()
-        else:
-            alpha_loss = torch.tensor(0.)
-
-        # Update alpha prime
-        if self.with_lagrange:
-            alpha_prime_loss = -0.5 * self.alpha_prime * (min_qf1_loss + min_qf2_loss).detach()
-            self.alpha_prime_optim.zero_grad()
-            alpha_prime_loss.backward()
-            self.alpha_prime_optim.step()
-        else:
-            alpha_prime_loss = torch.tensor(0.)
-
-        if (self.update_step + 1) % self.target_update_interval == 0:
-            soft_update(self.critic_target1, self.critic1, self.tau)
-            soft_update(self.critic_target2, self.critic2, self.tau)
-
-        self.update_step += 1
-        return policy_loss.item(), {
-            'qf1': qf1_loss.item(),
-            'qf2': qf2_loss.item(),
-            'min_qf1': min_qf1_loss.item(),
-            'min_qf2': min_qf2_loss.item(),
-            'policy': policy_loss.item(),
-            'alpha': alpha_loss.item(),
-            'alpha_prime': alpha_prime_loss.item(),
+        mean_loss = torch.stack(losses).mean()
+        sublosses = torch.stack(sublosses).mean(0)
+        subloss_keys = [
+            'policy', 'critic', 'alpha', 'alpha_prime',
+            'policy_min_qf_pi', 'entropy',
+            'qf1', 'qf2', 'min_qf1', 'min_qf2',
+        ]
+        subloss_dict = {k: v.item() for k, v in zip(subloss_keys, sublosses)}
+        subloss_dict.update({
             'val_alpha': self.alpha.item(),
             'val_alpha_prime': self.alpha_prime.item(),
-            'val_entropy': entropy.mean().item(),
-        }
+        })
+
+        return mean_loss.item(), subloss_dict
 
     def state_dict(self):
         state_dict = super().state_dict()

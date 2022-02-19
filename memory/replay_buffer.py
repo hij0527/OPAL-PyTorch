@@ -3,7 +3,7 @@ import random
 import torch
 
 
-class ReplayBuffer(object):
+class ReplayBuffer:
     def __init__(self, max_size, data_keys=None):
         self.max_size = max_size
         self.data_keys = data_keys
@@ -55,10 +55,19 @@ class ReplayBuffer(object):
 
     def sample(self, size=1, to_tensor=False, device=None):
         idxs = random.sample(range(len(self)), min(size, len(self)))
-        samples = tuple(buffer[idxs] for buffer in self.buffers)
+        samples = [buffer[idxs] for buffer in self.buffers]
+        return self._preprocess(samples, to_tensor, device)
 
+    def sample_all(self, shuffle=False, to_tensor=False, device=None):
+        idxs = np.arange(len(self))
+        if shuffle:
+            np.random.shuffle(idxs)
+        samples = [buffer[idxs] for buffer in self.buffers]
+        return self._preprocess(samples, to_tensor, device)
+
+    def _preprocess(self, samples, to_tensor, device):
         if to_tensor:
-            samples = tuple(self._to_tensor(item, device=device) for item in samples)
+            samples = [self._to_tensor(item, device=device) for item in samples]
 
         if self.data_keys:
             samples = {k: item for k, item in zip(self.data_keys, samples)}
@@ -71,6 +80,51 @@ class ReplayBuffer(object):
         elif isinstance(item, torch.Tensor):
             return item.detach().cpu().numpy()
         return np.array(item)
+
+    def _to_tensor(self, item, dtype=torch.float32, device=None):
+        if isinstance(item, torch.Tensor):
+            return item.to(dtype=dtype, device=device)
+        return torch.as_tensor(item, dtype=dtype, device=device)
+
+
+class FixedReplayBuffer:
+    def __init__(self, batch, data_keys=None):
+        if isinstance(batch, dict):
+            self.data = list(batch.values())
+            self.data_keys = list(batch.keys())
+            self.length = len(self.data[0])
+        elif isinstance(batch, tuple):
+            self.data = list(batch)
+            self.data_keys = data_keys
+            self.length = len(batch[0])
+        else:
+            self.data = [batch]
+            self.data_keys = data_keys
+            self.length = len(batch)
+
+    def __len__(self):
+        return self.length
+
+    def keys(self):
+        return self.data_keys
+
+    def clear(self):
+        pass
+
+    def sample(self, size=1, to_tensor=False, device=None):
+        return self._preprocess(self.data, to_tensor, device)
+
+    def sample_all(self, shuffle=False, to_tensor=False, device=None):
+        return self._preprocess(self.data, to_tensor, device)
+
+    def _preprocess(self, samples, to_tensor, device):
+        if to_tensor:
+            samples = [self._to_tensor(item, device=device) for item in samples]
+
+        if self.data_keys:
+            samples = {k: item for k, item in zip(self.data_keys, samples)}
+
+        return samples
 
     def _to_tensor(self, item, dtype=torch.float32, device=None):
         if isinstance(item, torch.Tensor):

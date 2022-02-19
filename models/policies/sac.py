@@ -52,6 +52,8 @@ class SAC(nn.Module):
         self.action_scale_bias = (1, 0) if action_scale_bias is None else action_scale_bias
         self.is_optimizer_initialized = False
 
+        self.policy = TaskPolicy(dim_s, dim_a, hidden_size, num_layers)
+
         self.critic1 = QNetwork(dim_s, dim_a, hidden_size, num_layers=2)
         self.critic2 = QNetwork(dim_s, dim_a, hidden_size, num_layers=2)
         self.critic_target1 = QNetwork(dim_s, dim_a, hidden_size, num_layers=2)
@@ -64,10 +66,8 @@ class SAC(nn.Module):
             self.log_alpha = nn.Parameter(torch.tensor(0., requires_grad=True))
             self.alpha_optim = None
 
-        self.policy = TaskPolicy(dim_s, dim_a, hidden_size, num_layers)
-
-        self.critic_optim = None
         self.policy_optim = None
+        self.critic_optim = None
 
         self.update_step = 0
 
@@ -90,89 +90,105 @@ class SAC(nn.Module):
         return action * self.action_scale_bias[0] + self.action_scale_bias[1]
 
     def init_optimizers(self, lr_actor=3e-4, lr_critic=3e-4):
-        self.critic_optim = Adam(list(self.critic1.parameters()) + list(self.critic2.parameters()), lr=lr_critic)
         self.policy_optim = Adam(self.policy.parameters(), lr=lr_actor)
+        self.critic_optim = Adam(list(self.critic1.parameters()) + list(self.critic2.parameters()), lr=lr_critic)
         if self.automatic_entropy_tuning:
             self.alpha_optim = Adam([self.log_alpha], lr=lr_actor)
         self.is_optimizer_initialized = True
 
-    def update(self, samples, prior_model=None, **kwargs):
-        state_batch, action_batch, next_state_batch = samples['observations'], samples['actions'], samples['next_observations']
-        reward_batch = samples['rewards'].unsqueeze(-1)
-        mask_batch = torch.logical_not(samples['successes']).to(state_batch.dtype).unsqueeze(-1)
+    def update(self, buffer, batch_size, num_updates=1, prior_model=None, **kwargs):
+        losses = []
+        sublosses = []
+        for _ in range(num_updates):
+            samples = buffer.sample(batch_size, to_tensor=True, device=next(self.policy.parameters()).device)
+            state_batch, next_state_batch = samples['observations'], samples['next_observations']
+            action_batch = samples['actions']
+            reward_batch = samples['rewards'].unsqueeze(-1)
+            mask_batch = torch.logical_not(samples['successes']).to(state_batch.dtype).unsqueeze(-1)
 
-        # Update Q
-        # Compute target Q values for next states
-        with torch.no_grad():
-            next_action, next_entropy, next_kld = self._sample_action_with_entropy(next_state_batch, prior_model)
-            qf1_next_target = self.critic_target1(next_state_batch, next_action)
-            qf2_next_target = self.critic_target2(next_state_batch, next_action)
-            min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha.item() * next_entropy
-            next_q_value = reward_batch + mask_batch * self.gamma * min_qf_next_target
-            if self.use_kld_penalty:
-                next_q_value -= next_kld
+            # Update Q
+            # Compute target Q values for next states
+            with torch.no_grad():
+                next_action, next_entropy, next_kld = self._sample_action_with_entropy(next_state_batch, prior_model)
+                qf1_next_target = self.critic_target1(next_state_batch, next_action)
+                qf2_next_target = self.critic_target2(next_state_batch, next_action)
+                min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha.item() * next_entropy
+                next_q_value = reward_batch + mask_batch * self.gamma * min_qf_next_target
+                if self.use_kld_penalty:
+                    next_q_value -= next_kld
 
-        # Two Q-functions to mitigate positive bias in the policy improvement step
-        qf1 = self.critic1(state_batch, action_batch)
-        qf2 = self.critic2(state_batch, action_batch)
-        qf1_loss = F.mse_loss(qf1, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
-        qf2_loss = F.mse_loss(qf2, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
+            # Two Q-functions to mitigate positive bias in the policy improvement step
+            qf1 = self.critic1(state_batch, action_batch)
+            qf2 = self.critic2(state_batch, action_batch)
+            qf1_loss = F.mse_loss(qf1, next_q_value)
+            qf2_loss = F.mse_loss(qf2, next_q_value)
 
-        qf_loss = qf1_loss + qf2_loss
-        self.critic_optim.zero_grad()
-        qf_loss.backward()
-        self.critic_optim.step()
+            critic_loss = qf1_loss + qf2_loss
+            self.critic_optim.zero_grad()
+            critic_loss.backward()
+            self.critic_optim.step()
 
-        # Update policy
-        action, entropy, kld = self._sample_action_with_entropy(state_batch, prior_model)
-        qf1_pi = self.critic1(state_batch, action)
-        qf2_pi = self.critic2(state_batch, action)
-        min_qf_pi = torch.min(qf1_pi, qf2_pi)
+            # Update policy
+            action, entropy, _ = self._sample_action_with_entropy(state_batch, prior_model)
+            qf1_pi = self.critic1(state_batch, action)
+            qf2_pi = self.critic2(state_batch, action)
+            min_qf_pi = -torch.min(qf1_pi, qf2_pi)
 
-        policy_loss = (self.alpha.item() * entropy - min_qf_pi).mean()  # Jπ = 𝔼st∼D,εt∼N[α * Entropy − Q(st,f(εt;st))]
-        self.policy_optim.zero_grad()
-        policy_loss.backward()
-        self.policy_optim.step()
+            policy_loss = (self.alpha.item() * entropy + min_qf_pi).mean()
+            self.policy_optim.zero_grad()
+            policy_loss.backward()
+            self.policy_optim.step()
 
-        # Update alpha
-        if self.automatic_entropy_tuning:
-            alpha_loss = -self.log_alpha * (entropy + self.target_entropy).detach().mean()
-            self.alpha_optim.zero_grad()
-            alpha_loss.backward()
-            self.alpha_optim.step()
-        else:
-            alpha_loss = torch.tensor(0.)
+            # Update alpha
+            if self.automatic_entropy_tuning:
+                alpha_loss = -self.log_alpha * (entropy + self.target_entropy).detach().mean()
+                self.alpha_optim.zero_grad()
+                alpha_loss.backward()
+                self.alpha_optim.step()
+            else:
+                alpha_loss = torch.tensor(0.)
 
-        if (self.update_step + 1) % self.target_update_interval == 0:
-            soft_update(self.critic_target1, self.critic1, self.tau)
-            soft_update(self.critic_target2, self.critic2, self.tau)
+            losses.append(torch.tensor(0.))
+            sublosses.append(torch.stack([
+                policy_loss, critic_loss, alpha_loss,
+                min_qf_pi.mean(), entropy.mean(),
+                qf1_loss, qf2_loss,
+            ]).detach())
 
-        self.update_step += 1
-        return policy_loss.item(), {
-            'qf1': qf1_loss.item(),
-            'qf2': qf2_loss.item(),
-            'policy': policy_loss.item(),
-            'alpha': alpha_loss.item(),
+            self.update_step += 1
+            if self.update_step % self.target_update_interval == 0:
+                soft_update(self.critic_target1, self.critic1, self.tau)
+                soft_update(self.critic_target2, self.critic2, self.tau)
+
+        mean_loss = torch.stack(losses).mean()
+        sublosses = torch.stack(sublosses).mean(0)
+        subloss_keys = [
+            'policy', 'critic', 'alpha',
+            'policy_min_qf_pi', 'entropy',
+            'qf1', 'qf2',
+        ]
+        subloss_dict = {k: v.item() for k, v in zip(subloss_keys, sublosses)}
+        subloss_dict.update({
             'val_alpha': self.alpha.item(),
-            'val_entropy': entropy.mean().item(),
-            'val_kld': kld.mean().item(),
-        }
+        })
+
+        return mean_loss.item(), subloss_dict
 
     # Save model parameters
     def state_dict(self):
         state_dict = {
+            'policy': self.policy.state_dict(),
             'critic1': self.critic1.state_dict(),
             'critic2': self.critic2.state_dict(),
             'critic_target1': self.critic_target1.state_dict(),
             'critic_target2': self.critic_target2.state_dict(),
-            'policy': self.policy.state_dict(),
             'action_scale_bias': self.action_scale_bias,
             'curr_alpha': self.alpha.item(),
         }
         if self.is_optimizer_initialized:
             state_dict.update({
-                'critic_optimizer': self.critic_optim.state_dict(),
                 'policy_optimizer': self.policy_optim.state_dict(),
+                'critic_optimizer': self.critic_optim.state_dict(),
             })
             if self.automatic_entropy_tuning:
                 state_dict.update({
@@ -182,17 +198,17 @@ class SAC(nn.Module):
 
     # Load model parameters
     def load_state_dict(self, state_dict):
+        self.policy.load_state_dict(state_dict['policy'])
         self.critic1.load_state_dict(state_dict['critic1'])
         self.critic2.load_state_dict(state_dict['critic2'])
         self.critic_target1.load_state_dict(state_dict['critic_target1'])
         self.critic_target2.load_state_dict(state_dict['critic_target2'])
-        self.policy.load_state_dict(state_dict['policy'])
         self.action_scale_bias = state_dict['action_scale_bias']
         self.val_alpha = state_dict['curr_alpha']
 
         if self.is_optimizer_initialized:
-            self.critic_optim.load_state_dict(state_dict['critic_optimizer'])
             self.policy_optim.load_state_dict(state_dict['policy_optimizer'])
+            self.critic_optim.load_state_dict(state_dict['critic_optimizer'])
 
         if self.automatic_entropy_tuning:
             self.log_alpha.data.fill_(np.log(self.val_alpha))
