@@ -4,10 +4,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam
-from torch.distributions import Normal
+from torch.distributions import Normal, kl_divergence
 
 from models.network import TaskPolicy, QNetwork
-from models.loss import gaussian_kld_loss
 
 
 def soft_update(target, source, tau):
@@ -34,9 +33,12 @@ class SAC(nn.Module):
         target_update_interval=1,
         automatic_entropy_tuning=True,
         max_entropy_range=100.,
-        use_kld_penalty=False,
+        kld_penalty_coeff=0.,
+        kld_max=100.,
         action_tanh=False,
-        action_scale_bias=None,
+        action_min=-1,
+        action_max=1,
+        adjust_action_range=False,
     ):
         super().__init__()
         self.gamma = gamma
@@ -47,10 +49,24 @@ class SAC(nn.Module):
         self.target_update_interval = target_update_interval
         self.automatic_entropy_tuning = automatic_entropy_tuning
         self.max_entropy_range = max_entropy_range
-        self.use_kld_penalty = use_kld_penalty
+        self.kld_penalty_coeff = kld_penalty_coeff
+        self.kld_max = kld_max
         self.action_tanh = action_tanh
-        self.action_scale_bias = (1, 0) if action_scale_bias is None else action_scale_bias
+        self.adjust_action_range = adjust_action_range
+        self.action_min = torch.as_tensor(
+            data=[-torch.inf] * dim_a if action_min is None or adjust_action_range else \
+                action_min if hasattr(action_min, '__iter__') else \
+                [action_min] * dim_a,
+            dtype=torch.float32,
+        )
+        self.action_max = torch.as_tensor(
+            data=[torch.inf] * dim_a if action_max is None or adjust_action_range else \
+                action_max if hasattr(action_max, '__iter__') else \
+                [action_max] * dim_a,
+            dtype=torch.float32,
+        )
         self.is_optimizer_initialized = False
+        self.is_alpha_updated = False
 
         self.policy = TaskPolicy(dim_s, dim_a, hidden_size, num_layers)
 
@@ -62,7 +78,7 @@ class SAC(nn.Module):
         hard_update(self.critic_target2, self.critic2)
 
         if self.automatic_entropy_tuning:
-            self.target_entropy = -dim_a + int(self.use_kld_penalty)
+            self.target_entropy = -dim_a + int(bool(self.kld_penalty_coeff))
             self.log_alpha = nn.Parameter(torch.tensor(0., requires_grad=True))
             self.alpha_optim = None
 
@@ -75,19 +91,28 @@ class SAC(nn.Module):
         mean, logstd = self.policy(observations)
         if self.action_tanh:
             mean = torch.tanh(mean)
-        mean = self.scale_action(mean)
+            mean = self.scale_action(mean)
+        else:
+            mean = self.clamp_action(mean)
         return mean, logstd
 
     @property
     def alpha(self):
-        if self.automatic_entropy_tuning:
+        if self.automatic_entropy_tuning and self.is_alpha_updated:
             return self.log_alpha.exp().clamp(min=self.alpha_min, max=self.alpha_max)
         return torch.tensor(self.val_alpha, dtype=torch.float32)
 
     def scale_action(self, action, inverse=False):
+        if torch.isinf(self.action_min).any() or torch.isinf(self.action_max).any():
+            return action
+        action_scale = ((self.action_max - self.action_min) * 0.5).to(action.device)
+        action_bias = ((self.action_max + self.action_min) * 0.5).to(action.device)
         if inverse:
-            return (action - self.action_scale_bias[1]) / self.action_scale_bias[0]
-        return action * self.action_scale_bias[0] + self.action_scale_bias[1]
+            return (action - action_bias) / action_scale.clamp(min=1e-6)
+        return action * action_scale + action_bias
+
+    def clamp_action(self, action):
+        return action.clamp(self.action_min.to(action.device), self.action_max.to(action.device))
 
     def init_optimizers(self, lr_actor=3e-4, lr_critic=3e-4):
         self.policy_optim = Adam(self.policy.parameters(), lr=lr_actor)
@@ -106,6 +131,9 @@ class SAC(nn.Module):
             reward_batch = samples['rewards'].unsqueeze(-1)
             mask_batch = torch.logical_not(samples['successes']).to(state_batch.dtype).unsqueeze(-1)
 
+            if self.adjust_action_range and not prior_model:  # TODO
+                self._update_action_range(action_batch)
+
             # Update Q
             # Compute target Q values for next states
             with torch.no_grad():
@@ -114,8 +142,7 @@ class SAC(nn.Module):
                 qf2_next_target = self.critic_target2(next_state_batch, next_action)
                 min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha.item() * next_entropy
                 next_q_value = reward_batch + mask_batch * self.gamma * min_qf_next_target
-                if self.use_kld_penalty:
-                    next_q_value -= next_kld
+                next_q_value -= self.kld_penalty_coeff * next_kld
 
             # Two Q-functions to mitigate positive bias in the policy improvement step
             qf1 = self.critic1(state_batch, action_batch)
@@ -145,26 +172,28 @@ class SAC(nn.Module):
                 self.alpha_optim.zero_grad()
                 alpha_loss.backward()
                 self.alpha_optim.step()
+                self.is_alpha_updated = True
             else:
-                alpha_loss = torch.tensor(0.)
+                alpha_loss = torch.tensor(0., device=policy_loss.device)
 
             losses.append(torch.tensor(0.))
             sublosses.append(torch.stack([
                 policy_loss, critic_loss, alpha_loss,
-                min_qf_pi.mean(), entropy.mean(),
+                min_qf_pi.mean(), entropy.mean(), next_kld.mean(),
                 qf1_loss, qf2_loss,
             ]).detach())
 
-            self.update_step += 1
             if self.update_step % self.target_update_interval == 0:
                 soft_update(self.critic_target1, self.critic1, self.tau)
                 soft_update(self.critic_target2, self.critic2, self.tau)
+
+            self.update_step += 1
 
         mean_loss = torch.stack(losses).mean()
         sublosses = torch.stack(sublosses).mean(0)
         subloss_keys = [
             'policy', 'critic', 'alpha',
-            'policy_min_qf_pi', 'entropy',
+            'policy_min_qf_pi', 'entropy', 'val_kld',
             'qf1', 'qf2',
         ]
         subloss_dict = {k: v.item() for k, v in zip(subloss_keys, sublosses)}
@@ -182,7 +211,8 @@ class SAC(nn.Module):
             'critic2': self.critic2.state_dict(),
             'critic_target1': self.critic_target1.state_dict(),
             'critic_target2': self.critic_target2.state_dict(),
-            'action_scale_bias': self.action_scale_bias,
+            'action_min': self.action_min,
+            'action_max': self.action_max,
             'curr_alpha': self.alpha.item(),
         }
         if self.is_optimizer_initialized:
@@ -203,7 +233,8 @@ class SAC(nn.Module):
         self.critic2.load_state_dict(state_dict['critic2'])
         self.critic_target1.load_state_dict(state_dict['critic_target1'])
         self.critic_target2.load_state_dict(state_dict['critic_target2'])
-        self.action_scale_bias = state_dict['action_scale_bias']
+        self.action_min = state_dict['action_min']
+        self.action_max = state_dict['action_max']
         self.val_alpha = state_dict['curr_alpha']
 
         if self.is_optimizer_initialized:
@@ -223,20 +254,30 @@ class SAC(nn.Module):
             action = torch.tanh(raw_action)
             action = self.scale_action(action)
         else:
-            action = raw_action
+            action = self.clamp_action(raw_action)
 
         entropy = dist_action.log_prob(raw_action)
         if self.action_tanh:
             entropy -= torch.log(1 - action.pow(2) + 1e-6)
         entropy = entropy.sum(-1, keepdim=True)  # match shape with Q output
 
-        if self.use_kld_penalty:  # use KL divergence to the prior in place of entropy
+        if self.kld_penalty_coeff:
             assert prior_model is not None
             with torch.no_grad():
                 prior_mean, prior_logstd = prior_model(state)
-            kld = gaussian_kld_loss(action_mean, action_logstd, prior_mean, prior_logstd, reduction='none')
-            kld = kld.sum(-1, keepdim=True)
+            if self.adjust_action_range:  # TODO
+                self._update_action_range(prior_mean)
+            dist_prior = Normal(prior_mean, prior_logstd.exp())
+            kld = kl_divergence(dist_action, dist_prior).sum(-1, keepdim=True).clamp(max=self.kld_max)
         else:
             kld = torch.zeros_like(entropy)
 
         return action, entropy, kld
+
+    def _update_action_range(self, actions):
+        if isinstance(actions, np.ndarray):
+            actions = torch.as_tensor(actions)
+        actions = actions.cpu()
+        sample_min, sample_max = actions.min(0)[0], actions.max(0)[0]
+        self.action_min = sample_min if torch.isinf(self.action_min).any() else torch.minimum(self.action_min, sample_min)
+        self.action_max = sample_max if torch.isinf(self.action_max).any() else torch.maximum(self.action_max, sample_max)

@@ -126,9 +126,10 @@ class PPO(nn.Module):
         for _ in range(num_updates):
             rand_indices = np.random.permutation(buffer_size)
             for j in range(0, buffer_size, batch_size):
-                idxs = rand_indices[j:j+buffer_size]
+                idxs = rand_indices[j:j+batch_size]
                 state_batch, action_batch, logprob_batch, advantage_batch, return_batch = [
-                    self._to_input(x) for x in [states_all, actions_all, logprobs_all, advantages_all, returns_all]
+                    self._to_input(x[idxs])
+                    for x in [states_all, actions_all, logprobs_all, advantages_all, returns_all]
                 ]
 
                 # Evaluate old actions and values

@@ -1,8 +1,8 @@
 import torch
-from torch.distributions import Normal
+from torch.distributions import Normal, kl_divergence
 from torch.optim import Adam
 
-from models.loss import gaussian_kld_loss, gaussian_nll_loss
+from models.loss import gaussian_nll_loss
 from models.network import Prior, Encoder, EncoderStateAgnostic, PrimitivePolicy, PrimitivePolicyStateAgnostic
 
 
@@ -125,7 +125,8 @@ class OPAL:
 
         # sample z ~ q_phi(z|tau) using reparameterization
         mean_z, logstd_z = self.encoder(states[:, 0] if self.state_agnostic else states, actions)
-        eps = torch.randn_like(mean_z)
+        dist_z = Normal(mean_z, logstd_z.exp())
+        eps = torch.randn_like(mean_z)  # not using rsample to enable truncated sampling
         max_eps = kwargs.get('truncate_normal', None)
         if max_eps:
             eps = torch.fmod(eps, max_eps)  # truncate values outside of (-max_eps, max_eps)
@@ -141,14 +142,15 @@ class OPAL:
 
         # KL divergence between two Gaussian q_phi and rho_omega: KLD(q_phi||rho_omega) (Eq. 2)
         prior_mean_z, prior_logstd_z = self.prior(states[:, 0])
+        dist_prior = Normal(prior_mean_z, prior_logstd_z.exp())
         eps_kld = kwargs.get('eps_kld', 0.)
-        loss_kld = gaussian_kld_loss(mean_z, logstd_z, prior_mean_z, prior_logstd_z, eps_kld)
+        loss_kld = kl_divergence(dist_z, dist_prior).sum(-1).clamp(min=eps_kld).mean()
 
         # additional regularization
         beta2 = kwargs.get('beta2', 0.)
         if beta2:
-            unit_mean, unit_logstd = torch.zeros_like(mean_z), torch.zeros_like(logstd_z)
-            loss_reg = gaussian_kld_loss(mean_z, logstd_z, unit_mean, unit_logstd)
+            dist_unit = Normal(torch.zeros_like(mean_z), torch.ones_like(logstd_z))
+            loss_reg = kl_divergence(dist_z, dist_unit).sum(-1).mean()
         else:
             loss_reg = torch.zeros_like(loss_kld)
 

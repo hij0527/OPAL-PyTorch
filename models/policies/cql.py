@@ -29,9 +29,12 @@ class CQL(SAC):
         target_update_interval=1,
         automatic_entropy_tuning=True,
         max_entropy_range=100.,
-        use_kld_penalty=False,
+        kld_penalty_coeff=0.,
+        kld_max=100.,
         action_tanh=False,
-        action_scale_bias=None,
+        action_min=-1,
+        action_max=1,
+        adjust_action_range=False,
 
         # CQL
         reg_type='H',  # 'H', 'rho', or 'var'
@@ -45,7 +48,6 @@ class CQL(SAC):
         alpha_prime_min=0.,
         alpha_prime_max=1e6,
         init_bc_steps=40000,
-        adjust_action_range=False,
     ):
         super().__init__(
             dim_s=dim_s,
@@ -60,9 +62,12 @@ class CQL(SAC):
             target_update_interval=target_update_interval,
             automatic_entropy_tuning=automatic_entropy_tuning,
             max_entropy_range=max_entropy_range,
-            use_kld_penalty=False,
+            kld_penalty_coeff=False,
+            kld_max=kld_max,
             action_tanh=action_tanh,
-            action_scale_bias=action_scale_bias,
+            action_min=action_min,
+            action_max=action_max,
+            adjust_action_range=adjust_action_range,
         )
 
         self.val_alpha_prime = alpha_prime
@@ -75,12 +80,6 @@ class CQL(SAC):
         self.temperature = temp
         self.num_random = num_random
         self.init_bc_steps = init_bc_steps
-        self.adjust_action_range = adjust_action_range
-
-        if adjust_action_range:
-            self.action_range = None
-        else:
-            self.action_range = self.scale_action(torch.stack([-torch.ones(dim_a), torch.ones(dim_a)]))
 
         if self.with_lagrange:
             self.target_action_gap = lagrange_thresh
@@ -262,7 +261,7 @@ class CQL(SAC):
             actions = torch.tanh(raw_actions)
             actions = self.scale_action(actions)
         else:
-            actions = raw_actions
+            actions = self.clamp_action(raw_actions)
 
         entropy = dist_action.log_prob(raw_actions)
         if self.action_tanh:
@@ -272,8 +271,8 @@ class CQL(SAC):
         return actions, entropy
 
     def _get_entropy(self, state, action):
-        action = self.scale_action(action, inverse=True)
         if self.action_tanh:
+            action = self.scale_action(action, inverse=True)
             assert action.abs().max() < 1 + 1e-6
             raw_action = torch.atanh(action * (1 - 1e-6))
         else:
@@ -288,16 +287,7 @@ class CQL(SAC):
 
         return entropy
 
-    def _update_action_range(self, actions):
-        sample_min, sample_max = actions.min(0)[0], actions.max(0)[0]
-        if self.action_range is None:
-            self.action_range = torch.stack([sample_min, sample_max])
-        else:
-            self.action_range = torch.stack([
-                torch.minimum(self.action_range[0], sample_min),
-                torch.maximum(self.action_range[1], sample_max)
-            ])
-
     def _sample_random_actions(self, batch_shape, device):
-        assert self.action_range is not None
-        return Uniform(*self.action_range).sample(batch_shape).to(device)
+        action_min = self.action_min.clamp(min=-1e6)
+        action_max = self.action_max.clamp(max=1e6)
+        return Uniform(action_min, action_max).sample(batch_shape).to(device)

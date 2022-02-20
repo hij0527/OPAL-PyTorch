@@ -80,7 +80,7 @@ class RLAgent:
                 'alpha_prime': float(alpha),
                 'alpha_prime_min': 0.001,
                 'lagrange_thresh': float(tau),
-                'with_lagrange': alpha == 0,
+                'with_lagrange': float(alpha) == 0,
             })
         else:
             raise ValueError('Unsupported policy type: {}'.format(policy_type))
@@ -166,7 +166,10 @@ class HRLAgent(RLAgent):
         if policy_type == 'sac':
             from models.policies.sac import SAC
             policy_cls = SAC
-            policy_kwargs.update({'use_kld_penalty': True})
+            policy_kwargs.update({
+                'kld_penalty_coeff': 1e-3,
+                'adjust_action_range': True,
+            })
         elif policy_type == 'cql':
             from models.policies.cql import CQL
             policy_cls = CQL
@@ -177,7 +180,7 @@ class HRLAgent(RLAgent):
                 'alpha_prime': float(alpha),
                 'alpha_prime_min': 0.001,
                 'lagrange_thresh': float(tau),
-                'with_lagrange': alpha == 0,
+                'with_lagrange': float(alpha) == 0,
                 'adjust_action_range': True,
             })
         else:

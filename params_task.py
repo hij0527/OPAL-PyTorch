@@ -41,8 +41,8 @@ def parse_args():
     ap.add_argument('--num_gru_layers', type=int, default=4, help='number of GRU layers')
 
     # data labeling
-    ap.add_argument('--load_latent_buffer', type=str, default=None, help='if set, load latent buffer from this path')
-    ap.add_argument('--save_latent_buffer', type=str, default=None, help='if set, save latent buffer to this path')
+    ap.add_argument('--load_latents', type=str, default=None, help='if set, load latents from this path')
+    ap.add_argument('--save_latents', type=str, default=None, help='if set, save latents to this path')
 
     # downstream task training
     ap.add_argument('--task_type', type=str, choices=['offline', 'imitation', 'online', 'multitask'], default='offline', help='downstream task type')

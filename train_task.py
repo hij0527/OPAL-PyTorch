@@ -170,27 +170,27 @@ def main(args):
 
 
 def label_dataset(buffer: SubtrajBuffer, opal: OPAL, args, device):
-    if args.load_latent_buffer:
-        print('Loading labeled dataset from: {}'.format(args.load_latent_buffer))
-        latent_buffer = np.load(args.load_latent_buffer)
+    if args.load_latents:
+        print('Loading labeled dataset from: {}'.format(args.load_latents))
+        latents = np.load(args.load_latents)
         # TODO: sanity check: dimension, encode results
     else:
         print('Constructing labeled dataset ...')
-        latent_buffer = np.empty((0, args.latent_dim), dtype=np.float32)
+        latents = np.empty((0, args.latent_dim), dtype=np.float32)
         sequential_loader = DataLoader(buffer, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
         for batch in iter(sequential_loader):
             observations, actions = [batch[k].to(device) for k in ['observations', 'actions']]
             with torch.no_grad():
                 latent_batch = opal.encode(observations, actions).cpu().numpy()
-            latent_buffer = np.append(latent_buffer, latent_batch, axis=0)
+            latents = np.append(latents, latent_batch, axis=0)
 
-        if args.save_latent_buffer:
-            print('Saving labeled dataset to: {}'.format(args.save_latent_buffer))
-            os.makedirs(os.path.dirname(args.save_latent_buffer), exist_ok=True)
-            np.save(args.save_latent_buffer, latent_buffer)
+        if args.save_latents:
+            print('Saving labeled dataset to: {}'.format(args.save_latents))
+            os.makedirs(os.path.dirname(args.save_latents), exist_ok=True)
+            np.save(args.save_latents, latents)
 
-    buffer.add_latents(latent_buffer)
+    buffer.add_latents(latents)
 
 
 if __name__ == "__main__":

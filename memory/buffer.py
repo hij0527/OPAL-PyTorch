@@ -133,7 +133,7 @@ class SubtrajBuffer(Buffer):
         domain_name,
         task_name,
         subtraj_len,
-        sliding_window_step=0,
+        sliding_window_step=1,
         normalize=False,
         sparse_reward=False,
         verbose=False,
